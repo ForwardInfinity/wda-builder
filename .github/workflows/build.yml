@@ -33,9 +33,9 @@ jobs:
       - name: Patch test class (drop FBFailureProofTestCase for iOS 26)
         run: |
           # iOS 26.6: FBFailureProofTestCase private-API overrides deadlock the runner
-          sed -i 's|#import <WebDriverAgentLib/FBFailureProofTestCase.h>|// patched: no FBFailureProofTestCase|' WebDriverAgentRunner/UITestingUITests.m
-          sed -i 's/@interface UITestingUITests : FBFailureProofTestCase <FBWebServerDelegate>/@interface UITestingUITests : XCTestCase <FBWebServerDelegate>/' WebDriverAgentRunner/UITestingUITests.m
-          grep -n "XCTestCase <FBWebServerDelegate>" WebDriverAgentRunner/UITestingUITests.m || echo "PATCH FAILED" 
+          perl -pi -e 's|#import <WebDriverAgentLib/FBFailureProofTestCase.h>|// patched: no FBFailureProofTestCase|' WebDriverAgentRunner/UITestingUITests.m
+          perl -pi -e 's/@interface UITestingUITests : FBFailureProofTestCase <FBWebServerDelegate>/@interface UITestingUITests : XCTestCase <FBWebServerDelegate>/' WebDriverAgentRunner/UITestingUITests.m
+          grep -n "XCTestCase <FBWebServerDelegate>" WebDriverAgentRunner/UITestingUITests.m && echo "PATCH OK" || echo "PATCH FAILED" 
 
       - name: Build WDA
         run: |
