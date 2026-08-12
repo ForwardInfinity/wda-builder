@@ -134,3 +134,4 @@ jobs:
           path: WebDriverAgent-iOS18.ipa
           retention-days: 30
 
+# force rescan
