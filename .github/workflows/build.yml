@@ -46,79 +46,15 @@ jobs:
             clean build \
             CONFIGURATION_BUILD_DIR=$PWD/build 2>&1 | tail -30
 
-      - name: Fix xctest signing for Sideloadly
+      - name: Verify build output
         run: |
           APP="$PWD/build/WebDriverAgentRunner-Runner.app"
-          XCTEST="$APP/PlugIns/WebDriverAgentRunner.xctest"
-          FRAMEWORKS="$APP/Frameworks"
-          
-          echo "=== Before fix ==="
-          ls -la "$XCTEST/"
-          ls -la "$XCTEST/Frameworks/" 2>/dev/null || true
-          
-          # Move xctest's internal framework to main Frameworks
-          if [ -d "$XCTEST/Frameworks" ]; then
-            for fw in "$XCTEST/Frameworks/"*.framework; do
-              if [ -d "$fw" ]; then
-                fw_name=$(basename "$fw")
-                echo "Moving $fw_name from xctest to main Frameworks"
-                cp -R "$fw" "$FRAMEWORKS/$fw_name" 2>/dev/null || true
-              fi
-            done
-            rm -rf "$XCTEST/Frameworks"
-          fi
-          
-          # Convert xctest binary into a dylib in Frameworks
-          XCTEST_BIN="$XCTEST/WebDriverAgentRunner"
-          if [ -f "$XCTEST_BIN" ]; then
-            echo "Creating WebDriverAgentRunner.framework from xctest binary"
-            mkdir -p "$FRAMEWORKS/WebDriverAgentRunner.framework"
-            cp "$XCTEST_BIN" "$FRAMEWORKS/WebDriverAgentRunner.framework/WebDriverAgentRunner"
-            
-            # Create Info.plist for framework
-            PLIST_FILE="$FRAMEWORKS/WebDriverAgentRunner.framework/Info.plist"
-            echo '<?xml version="1.0" encoding="UTF-8"?>' > "$PLIST_FILE"
-            echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' >> "$PLIST_FILE"
-            echo '<plist version="1.0">' >> "$PLIST_FILE"
-            echo '<dict>' >> "$PLIST_FILE"
-            echo '  <key>CFBundleIdentifier</key>' >> "$PLIST_FILE"
-            echo '  <string>com.facebook.WebDriverAgentRunner</string>' >> "$PLIST_FILE"
-            echo '  <key>CFBundleName</key>' >> "$PLIST_FILE"
-            echo '  <string>WebDriverAgentRunner</string>' >> "$PLIST_FILE"
-            echo '  <key>CFBundleExecutable</key>' >> "$PLIST_FILE"
-            echo '  <string>WebDriverAgentRunner</string>' >> "$PLIST_FILE"
-            echo '  <key>CFBundleVersion</key>' >> "$PLIST_FILE"
-            echo '  <string>1</string>' >> "$PLIST_FILE"
-            echo '  <key>CFBundlePackageType</key>' >> "$PLIST_FILE"
-            echo '  <string>FMWK</string>' >> "$PLIST_FILE"
-            echo '</dict>' >> "$PLIST_FILE"
-            echo '</plist>' >> "$PLIST_FILE"
-          fi
-          
-          # Now sign EVERYTHING properly with the SAME ad-hoc identity
-          # Sign all frameworks first (inner to outer)
-          find "$APP/Frameworks" -name "*.framework" -type d | while read fw; do
-            echo "Signing: $(basename $fw)"
-            codesign --force --sign - --timestamp=none --generate-entitlement-der "$fw"
-          done
-          
-          # Sign xctest binary 
-          if [ -f "$XCTEST_BIN" ]; then
-            echo "Signing xctest binary"
-            codesign --force --sign - --timestamp=none --generate-entitlement-der "$XCTEST_BIN"
-          fi
-          
-          # Sign xctest bundle
-          echo "Signing xctest bundle"
-          codesign --force --sign - --timestamp=none --generate-entitlement-der "$XCTEST"
-          
-          # Sign main app
-          echo "Signing main app"
-          codesign --force --sign - --timestamp=none --generate-entitlement-der "$APP"
-          
-          echo "=== Verification ==="
-          codesign -dvvv "$XCTEST_BIN" 2>&1 | head -5
-          codesign --verify --deep "$APP" 2>&1 || true
+          ls -la "$APP/"
+          echo "--- PlugIns ---"
+          ls -la "$APP/PlugIns/" 2>/dev/null || echo "(no PlugIns dir)"
+          echo "--- Frameworks ---"
+          ls -la "$APP/Frameworks/" 2>/dev/null || echo "(no Frameworks dir)"
+          file "$APP/WebDriverAgentRunner-Runner" 2>/dev/null
 
       - name: Package IPA
         run: |
