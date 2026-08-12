@@ -44,7 +44,7 @@ jobs:
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO \
             clean build \
-            CONFIGURATION_BUILD_DIR=$PWD/build 2>&1 | tail -30
+            CONFIGURATION_BUILD_DIR=$PWD/build
 
       - name: Verify build output
         run: |
