@@ -1,0 +1,103 @@
+name: Build Jarvis WDA continued runner
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - name: Checkout Jarvis builder inputs
+        uses: actions/checkout@v4
+        with:
+          path: builder
+
+      - name: Checkout pinned WebDriverAgent
+        uses: actions/checkout@v4
+        with:
+          repository: appium/WebDriverAgent
+          ref: ee029da84448895c4ad51be0688e7b7df30697de
+          submodules: true
+          path: wda
+
+      - name: Setup Xcode 26
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26'
+
+      - name: Patch continued processing
+        run: |
+          set -euo pipefail
+          python3 builder/agent/patch_wda_continued_processing.py wda
+          grep -n 'JARVIS_WDA_CONTINUED_SUBMITTED' wda/WebDriverAgentRunner/UITestingUITests.m
+          grep -n 'XCTestCase <FBWebServerDelegate>' wda/WebDriverAgentRunner/UITestingUITests.m
+          ! grep -R -E 'Bearer [A-Za-z0-9_-]{20,}|ntfy-topic|/root/.config/jarvis/passcode' builder/agent
+
+      - name: Show versions
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Bootstrap WDA
+        working-directory: wda
+        run: |
+          if [ -f ./Scripts/bootstrap.sh ]; then
+            bash ./Scripts/bootstrap.sh -d
+          fi
+
+      - name: Build unsigned arm64 WDA
+        working-directory: wda
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project WebDriverAgent.xcodeproj \
+            -scheme WebDriverAgentRunner \
+            -sdk iphoneos \
+            -configuration Release \
+            -destination generic/platform=iOS \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            ASSETCATALOG_COMPILER_APPICON_NAME= \
+            ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS=NO \
+            clean build \
+            CONFIGURATION_BUILD_DIR="$PWD/build"
+
+      - name: Verify and package
+        working-directory: wda
+        run: |
+          set -euo pipefail
+          APP="$PWD/build/WebDriverAgentRunner-Runner.app"
+          test -x "$APP/WebDriverAgentRunner-Runner"
+          AGENT_BIN="$APP/PlugIns/WebDriverAgentRunner.xctest/WebDriverAgentRunner"
+          test -x "$AGENT_BIN"
+          python3 ../builder/agent/patch_wda_runner_info.py "$APP"
+          strings "$AGENT_BIN" > /tmp/jarvis-wda.strings
+          grep -q 'JARVIS_WDA_CONTINUED_SUBMITTED' /tmp/jarvis-wda.strings
+          grep -q 'JARVIS_WDA_CONTINUED_ACTIVE' /tmp/jarvis-wda.strings
+          /usr/libexec/PlistBuddy -c 'Print :BGTaskSchedulerPermittedIdentifiers:0' "$APP/Info.plist" | grep -qx 'com.ios-use.wda.00008101-00064d1a3a68001e.wda-recovery.*'
+          cat > "$APP/JarvisAgentBuild.json" <<'JSON'
+          {"agent":"wda-continued-processing","version":1,"wda_commit":"ee029da84448895c4ad51be0688e7b7df30697de"}
+          JSON
+          rm -rf Payload
+          mkdir Payload
+          cp -R "$APP" Payload/
+          /usr/bin/zip -qry WebDriverAgent-Jarvis-Continued-v1.ipa Payload
+          IPA_BYTES="$(stat -f%z WebDriverAgent-Jarvis-Continued-v1.ipa)"
+          echo "IPA_BYTES=$IPA_BYTES"
+          test "$IPA_BYTES" -gt 100000
+          shasum -a 256 WebDriverAgent-Jarvis-Continued-v1.ipa
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jarvis-WDA-Continued-v1
+          path: wda/WebDriverAgent-Jarvis-Continued-v1.ipa
+          retention-days: 14
+          if-no-files-found: error
