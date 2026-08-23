@@ -1,4 +1,4 @@
-name: Build Jarvis WDA continued runner
+name: Build Jarvis WDA host continuation
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ permissions:
 jobs:
   build:
     runs-on: macos-15
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
       - name: Checkout Jarvis builder inputs
         uses: actions/checkout@v4
@@ -24,23 +24,25 @@ jobs:
           submodules: true
           path: wda
 
+      - name: Checkout pinned Mach-O injector
+        uses: actions/checkout@v4
+        with:
+          repository: tyilo/insert_dylib
+          ref: eb7278162af8fcc372e7f2946a2dee6a386b17d8
+          path: insert_dylib
+
       - name: Setup Xcode 26
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: '26'
 
-      - name: Patch continued processing
+      - name: Patch WDA sources
         run: |
           set -euo pipefail
-          python3 builder/agent/patch_wda_continued_processing.py wda
-          grep -n 'JARVIS_WDA_CONTINUED_SUBMITTED' wda/WebDriverAgentRunner/UITestingUITests.m
+          python3 builder/agent/patch_wda_host.py wda
           grep -n 'XCTestCase <FBWebServerDelegate>' wda/WebDriverAgentRunner/UITestingUITests.m
+          grep -n 'jarvisContinued' wda/WebDriverAgentLib/Commands/FBSessionCommands.m
           ! grep -R -E 'Bearer [A-Za-z0-9_-]{20,}|ntfy-topic|/root/.config/jarvis/passcode' builder/agent
-
-      - name: Show versions
-        run: |
-          xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-version
 
       - name: Bootstrap WDA
         working-directory: wda
@@ -69,35 +71,63 @@ jobs:
             clean build \
             CONFIGURATION_BUILD_DIR="$PWD/build"
 
+      - name: Inject host continuation dylib
+        run: |
+          set -euo pipefail
+          APP="$GITHUB_WORKSPACE/wda/build/WebDriverAgentRunner-Runner.app"
+          BIN="$APP/WebDriverAgentRunner-Runner"
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun clang "$GITHUB_WORKSPACE/insert_dylib/insert_dylib/main.c" -o /tmp/insert_dylib
+          mkdir -p "$APP/Frameworks"
+          xcrun clang \
+            -fobjc-arc \
+            -arch arm64 \
+            -isysroot "$SDK" \
+            -miphoneos-version-min=15.0 \
+            -dynamiclib "$GITHUB_WORKSPACE/builder/agent/JarvisWDAHost.m" \
+            -install_name '@rpath/JarvisWDAHost.dylib' \
+            -framework Foundation \
+            -framework UIKit \
+            -framework BackgroundTasks \
+            -o "$APP/Frameworks/JarvisWDAHost.dylib"
+          /tmp/insert_dylib --inplace --all-yes --strip-codesig \
+            '@executable_path/Frameworks/JarvisWDAHost.dylib' "$BIN"
+          otool -L "$BIN" | grep -F '@executable_path/Frameworks/JarvisWDAHost.dylib'
+          file "$APP/Frameworks/JarvisWDAHost.dylib" | grep -q arm64
+
       - name: Verify and package
         working-directory: wda
         run: |
           set -euo pipefail
           APP="$PWD/build/WebDriverAgentRunner-Runner.app"
-          test -x "$APP/WebDriverAgentRunner-Runner"
+          HOST_LIB="$APP/Frameworks/JarvisWDAHost.dylib"
           AGENT_BIN="$APP/PlugIns/WebDriverAgentRunner.xctest/WebDriverAgentRunner"
+          test -x "$APP/WebDriverAgentRunner-Runner"
+          test -f "$HOST_LIB"
           test -x "$AGENT_BIN"
           python3 ../builder/agent/patch_wda_runner_info.py "$APP"
-          strings "$AGENT_BIN" > /tmp/jarvis-wda.strings
-          grep -q 'JARVIS_WDA_CONTINUED_SUBMITTED' /tmp/jarvis-wda.strings
-          grep -q 'JARVIS_WDA_CONTINUED_ACTIVE' /tmp/jarvis-wda.strings
+          strings "$HOST_LIB" > /tmp/jarvis-wda-host.strings
+          strings "$APP/PlugIns/WebDriverAgentRunner.xctest/Frameworks/WebDriverAgentLib.framework/WebDriverAgentLib" > /tmp/jarvis-wda-lib.strings
+          grep -q 'JARVIS_WDA_HOST_CONTINUED_ACTIVE' /tmp/jarvis-wda-host.strings
+          grep -q 'JARVIS_WDA_HOST_CONTINUED_SUBMITTED' /tmp/jarvis-wda-host.strings
+          grep -q 'jarvisContinued' /tmp/jarvis-wda-lib.strings
           /usr/libexec/PlistBuddy -c 'Print :BGTaskSchedulerPermittedIdentifiers:0' "$APP/Info.plist" | grep -qx 'com.ios-use.wda.00008101-00064d1a3a68001e.wda-recovery.*'
           cat > "$APP/JarvisAgentBuild.json" <<'JSON'
-          {"agent":"wda-continued-processing","version":4,"wda_commit":"ee029da84448895c4ad51be0688e7b7df30697de"}
+          {"agent":"wda-host-continued-processing","version":5,"wda_commit":"ee029da84448895c4ad51be0688e7b7df30697de","injector_commit":"eb7278162af8fcc372e7f2946a2dee6a386b17d8"}
           JSON
           rm -rf Payload
           mkdir Payload
           cp -R "$APP" Payload/
-          /usr/bin/zip -qry WebDriverAgent-Jarvis-Continued-v4.ipa Payload
-          IPA_BYTES="$(stat -f%z WebDriverAgent-Jarvis-Continued-v4.ipa)"
+          /usr/bin/zip -qry WebDriverAgent-Jarvis-HostContinued-v5.ipa Payload
+          IPA_BYTES="$(stat -f%z WebDriverAgent-Jarvis-HostContinued-v5.ipa)"
           echo "IPA_BYTES=$IPA_BYTES"
           test "$IPA_BYTES" -gt 100000
-          shasum -a 256 WebDriverAgent-Jarvis-Continued-v4.ipa
+          shasum -a 256 WebDriverAgent-Jarvis-HostContinued-v5.ipa
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Jarvis-WDA-Continued-v4
-          path: wda/WebDriverAgent-Jarvis-Continued-v4.ipa
+          name: Jarvis-WDA-HostContinued-v5
+          path: wda/WebDriverAgent-Jarvis-HostContinued-v5.ipa
           retention-days: 14
           if-no-files-found: error
