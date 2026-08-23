@@ -13,6 +13,8 @@ SNIPPET = r'''
 // Jarvis WDA continued-processing v1.
 static BGContinuedProcessingTask *JVWDAContinuedTask;
 static dispatch_source_t JVWDAProgressTimer;
+static id JVWDAForegroundObserver;
+static BOOL JVWDAContinuedStarted;
 
 static void JVStopWDAProgressTimer(void)
 {
@@ -24,6 +26,10 @@ static void JVStopWDAProgressTimer(void)
 
 static void JVStartWDAContinuedProcessing(void)
 {
+  if (JVWDAContinuedStarted) {
+    return;
+  }
+  JVWDAContinuedStarted = YES;
   if (@available(iOS 26.0, *)) {
     NSString *bundleIdentifier = NSBundle.mainBundle.bundleIdentifier;
     NSString *identifier = [NSString stringWithFormat:@"%@.wda-recovery.%@", bundleIdentifier, NSUUID.UUID.UUIDString.lowercaseString];
@@ -95,7 +101,7 @@ def main() -> None:
         raise RuntimeError("unexpected XCTest import count")
     text = text.replace(
         xctest_import,
-        xctest_import + "\n#import <BackgroundTasks/BackgroundTasks.h>",
+        xctest_import + "\n#import <BackgroundTasks/BackgroundTasks.h>\n#import <UIKit/UIKit.h>",
         1,
     )
 
@@ -109,6 +115,34 @@ def main() -> None:
         "// Jarvis iOS 26 patch: no FBFailureProofTestCase import",
         1,
     )
+
+    implementation = "@implementation UITestingUITests"
+    load_method = r'''@implementation UITestingUITests
+
++ (void)load
+{
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (UIApplication.sharedApplication.applicationState == UIApplicationStateActive) {
+      JVStartWDAContinuedProcessing();
+      return;
+    }
+    JVWDAForegroundObserver = [NSNotificationCenter.defaultCenter
+      addObserverForName:UIApplicationDidBecomeActiveNotification
+      object:nil
+      queue:NSOperationQueue.mainQueue
+      usingBlock:^(NSNotification *notification) {
+        (void)notification;
+        JVStartWDAContinuedProcessing();
+        if (JVWDAForegroundObserver != nil) {
+          [NSNotificationCenter.defaultCenter removeObserver:JVWDAForegroundObserver];
+          JVWDAForegroundObserver = nil;
+        }
+      }];
+  });
+}'''
+    if text.count(implementation) != 1:
+        raise RuntimeError("UITestingUITests implementation anchor missing")
+    text = text.replace(implementation, load_method, 1)
 
     serving = "  [webServer startServing];"
     if text.count(serving) != 1:
