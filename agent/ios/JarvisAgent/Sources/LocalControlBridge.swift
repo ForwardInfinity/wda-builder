@@ -13,6 +13,53 @@ private final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate {
     }
 }
 
+private final class PasscodeXMLGateParser: NSObject, XMLParserDelegate {
+    private(set) var digits = Set<String>()
+    private(set) var titlePresent = false
+    private(set) var emergencyPresent = false
+    private(set) var cancelPresent = false
+    private(set) var emptyFieldPresent = false
+
+    var passed: Bool {
+        digits == Set((0...9).map(String.init))
+            && titlePresent
+            && emergencyPresent
+            && cancelPresent
+            && emptyFieldPresent
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didStartElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?,
+        attributes attributeDict: [String: String] = [:]
+    ) {
+        let name = attributeDict["name"] ?? ""
+        let label = attributeDict["label"] ?? ""
+        let value = attributeDict["value"] ?? ""
+        if elementName == "XCUIElementTypeKey" {
+            for candidate in [name, label] where candidate.count == 1 && candidate.first?.isNumber == true {
+                digits.insert(candidate)
+            }
+        }
+        if name == "Enter Passcode" || label == "Enter Passcode" {
+            titlePresent = true
+        }
+        if name == "Emergency" || label == "Emergency" {
+            emergencyPresent = true
+        }
+        if name == "Cancel" || label == "Cancel" {
+            cancelPresent = true
+        }
+        if elementName == "XCUIElementTypeSecureTextField"
+            && (name == "Passcode field" || label == "Passcode field")
+            && value == "0 of 6 values entered" {
+            emptyFieldPresent = true
+        }
+    }
+}
+
 struct LocalControlResult {
     let status: String
     let metadata: [String: Any]
@@ -347,27 +394,34 @@ final class LocalControlBridge {
                 return
             }
             // /wda/unlock blocks until FBScreenLockTimeout when a passcode is
-            // present. Direct Home events return immediately, keeping the
-            // keypad awake long enough for the semantic source gate.
-            self.sendHID(sessionID: sessionID, page: 0x0C, usage: 0x40, duration: 0.08) { firstCode in
-                guard firstCode == 200 else {
-                    completion(firstCode, false)
+            // present. Home wakes Cover Sheet; one fixed public digit then
+            // exposes the keypad. Backspace removes it before the XML gate,
+            // which requires exactly "0 of 6 values entered".
+            self.wdaRequest(
+                method: "POST",
+                path: "/session/\(sessionID)/wda/pressButton",
+                body: ["name": "home"]
+            ) { homeCode, _ in
+                guard homeCode == 200 else {
+                    completion(homeCode, false)
                     return
                 }
                 self.callbackQueue.asyncAfter(deadline: .now() + 0.20) {
-                    self.sendHID(sessionID: sessionID, page: 0x0C, usage: 0x40, duration: 0.08) { secondCode in
-                        guard secondCode == 200 else {
-                            completion(secondCode, false)
+                    self.sendHID(sessionID: sessionID, usage: 0x1E, duration: 0.15) { publicDigitCode in
+                        guard publicDigitCode == 200 else {
+                            completion(publicDigitCode, false)
                             return
                         }
                         self.callbackQueue.asyncAfter(deadline: .now() + 0.20) {
-                            self.sendHID(sessionID: sessionID, usage: 0x2A, duration: 0.03) { backspaceCode in
-                                guard backspaceCode == 200 else {
-                                    completion(backspaceCode, false)
+                            self.sendHID(sessionID: sessionID, usage: 0x2A, duration: 0.05) { cleanupCode in
+                                guard cleanupCode == 200 else {
+                                    completion(cleanupCode, false)
                                     return
                                 }
-                                self.callbackQueue.asyncAfter(deadline: .now() + 0.35) {
-                                    self.queryPasscodeKeypad(sessionID: sessionID, completion: completion)
+                                self.callbackQueue.asyncAfter(deadline: .now() + 0.30) {
+                                    self.wdaRequest(method: "GET", path: "/source", body: nil) { sourceCode, data in
+                                        completion(sourceCode, sourceCode == 200 && self.isEmptyPasscodeXML(data))
+                                    }
                                 }
                             }
                         }
@@ -407,58 +461,18 @@ final class LocalControlBridge {
         }
     }
 
-    private func findElementCount(
-        sessionID: String,
-        predicate: String,
-        completion: @escaping (Int, Int) -> Void
-    ) {
-        guard validIdentifier(sessionID) else {
-            completion(0, 0)
-            return
+    private func isEmptyPasscodeXML(_ data: Data?) -> Bool {
+        guard let data,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let source = object["value"] as? String,
+              source.utf8.count <= 2_000_000,
+              let xml = source.data(using: .utf8) else {
+            return false
         }
-        wdaRequest(
-            method: "POST",
-            path: "/session/\(sessionID)/elements",
-            body: ["using": "predicate string", "value": predicate]
-        ) { code, data in
-            guard code == 200, let data,
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let elements = object["value"] as? [[String: Any]] else {
-                completion(code, 0)
-                return
-            }
-            completion(code, elements.count)
-        }
-    }
-
-    private func queryPasscodeKeypad(
-        sessionID: String,
-        completion: @escaping (Int, Bool) -> Void
-    ) {
-        findElementCount(
-            sessionID: sessionID,
-            predicate: "label IN {'0','1','2','3','4','5','6','7','8','9'}"
-        ) { digitCode, digitCount in
-            guard digitCode == 200, digitCount == 10 else {
-                completion(digitCode, false)
-                return
-            }
-            self.findElementCount(
-                sessionID: sessionID,
-                predicate: "label CONTAINS[c] 'passcode'"
-            ) { titleCode, titleCount in
-                guard titleCode == 200, titleCount >= 1 else {
-                    completion(titleCode, false)
-                    return
-                }
-                self.findElementCount(
-                    sessionID: sessionID,
-                    predicate: "label == 'Emergency' OR label == 'Cancel'"
-                ) { escapeCode, escapeCount in
-                    completion(escapeCode, escapeCode == 200 && escapeCount >= 2)
-                }
-            }
-        }
+        let gate = PasscodeXMLGateParser()
+        let parser = XMLParser(data: xml)
+        parser.delegate = gate
+        return parser.parse() && gate.passed
     }
 
     private func sendHID(
