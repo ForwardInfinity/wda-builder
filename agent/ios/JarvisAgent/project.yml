@@ -20,8 +20,6 @@ targets:
     platform: iOS
     sources:
       - path: Sources
-    info:
-      path: Sources/Info.plist
     settings:
       base:
         PRODUCT_NAME: JarvisAgent
