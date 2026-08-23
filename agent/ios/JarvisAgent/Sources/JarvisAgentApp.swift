@@ -73,6 +73,8 @@ struct JarvisAgentApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var agent = AgentController.shared
     @State private var recoveryRequested = false
+    @State private var devicePasscode = ""
+    @State private var passcodeStatus = ""
 
     var body: some Scene {
         WindowGroup {
@@ -108,7 +110,37 @@ struct JarvisAgentApp: App {
                         }
                     }
 
-                    Text("This prototype sends only authenticated health metadata. It does not read the passcode, screen, photos, messages, or location.")
+                    GroupBox("Device-local unlock") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            if agent.unlockProvisioned {
+                                Label("Six-digit passcode protected in this iPhone Keychain", systemImage: "checkmark.shield")
+                                    .font(.footnote)
+                                Button("Remove Local Unlock Secret", role: .destructive) {
+                                    agent.removeDevicePasscode()
+                                    devicePasscode = ""
+                                    passcodeStatus = "Removed"
+                                }
+                            } else {
+                                Text("Enter once on-device. It never enters a VPS request or result.")
+                                    .font(.footnote)
+                                SecureField("Six-digit iPhone passcode", text: $devicePasscode)
+                                    .keyboardType(.numberPad)
+                                    .textContentType(.password)
+                                Button("Save in This iPhone Keychain") {
+                                    let accepted = agent.provisionDevicePasscode(devicePasscode)
+                                    devicePasscode = ""
+                                    passcodeStatus = accepted ? "Saved locally" : "Exactly six digits required"
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                            if !passcodeStatus.isEmpty {
+                                Text(passcodeStatus).font(.caption).foregroundColor(.secondary)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    Text("Only allowlisted command outcomes leave the device. Passcode, screenshots, UI trees, photos, messages, and location are never sent to the VPS.")
                         .font(.footnote)
                         .foregroundColor(.secondary)
 

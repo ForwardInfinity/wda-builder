@@ -18,11 +18,10 @@ struct LocalControlResult {
     let metadata: [String: Any]
 }
 
-/// A deliberately narrow bridge to services on the iPhone loopback interface.
+/// Deliberately narrow bridge to WDA on the iPhone loopback interface.
 ///
-/// It cannot proxy arbitrary URLs, bundle IDs, coordinates, text, or HID data.
-/// The first release only probes fixed local endpoints and performs two fixed,
-/// non-secret WDA actions. No response body leaves the device.
+/// It cannot proxy arbitrary URLs, bundle IDs, coordinates, text, or command
+/// parameters. UI trees are inspected only in memory and never returned.
 final class LocalControlBridge {
     static let shared = LocalControlBridge()
 
@@ -33,8 +32,8 @@ final class LocalControlBridge {
 
     private lazy var session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 4
-        configuration.timeoutIntervalForResource = 5
+        configuration.timeoutIntervalForRequest = 8
+        configuration.timeoutIntervalForResource = 12
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.waitsForConnectivity = false
         configuration.allowsCellularAccess = false
@@ -47,7 +46,11 @@ final class LocalControlBridge {
 
     private init() {}
 
-    func perform(action: String, completion: @escaping (LocalControlResult) -> Void) {
+    func perform(
+        action: String,
+        commandID: String,
+        completion: @escaping (LocalControlResult) -> Void
+    ) {
         switch action {
         case "probe-local-control":
             probeLocalControl(completion: completion)
@@ -65,11 +68,14 @@ final class LocalControlBridge {
                 successEffect: "settings-launch-sent",
                 completion: completion
             )
+        case "wda-continue-recovery":
+            continueRecovery(completion: completion)
+        case "wda-keyboard-probe":
+            keyboardProbe(completion: completion)
+        case "secure-unlock":
+            secureUnlock(commandID: commandID, completion: completion)
         default:
-            completion(LocalControlResult(
-                status: "error",
-                metadata: ["control_error": "unsupported-action", "effect": "none"]
-            ))
+            completion(failure("unsupported-action"))
         }
     }
 
@@ -98,8 +104,8 @@ final class LocalControlBridge {
                 return
             }
             group.enter()
-            self.wdaRequest(method: "GET", path: "/wda/locked", body: nil) { lockCode, lockData in
-                if lockCode == 200, let locked = self.wdaLocked(from: lockData) {
+            self.readLockState { lockCode, locked in
+                if lockCode == 200, let locked {
                     resultLock.lock()
                     metadata["wda_locked"] = locked
                     resultLock.unlock()
@@ -144,13 +150,12 @@ final class LocalControlBridge {
                 "control_error": code == 0 ? "wda-unreachable" : (code == 200 ? "none" : "wda-http-error"),
             ]
             let status = code == 200 ? "ok" : "error"
-
             guard code == 200 else {
                 completion(LocalControlResult(status: status, metadata: metadata))
                 return
             }
-            self.wdaRequest(method: "GET", path: "/wda/locked", body: nil) { lockCode, lockData in
-                if lockCode == 200, let locked = self.wdaLocked(from: lockData) {
+            self.readLockState { lockCode, locked in
+                if lockCode == 200, let locked {
                     metadata["wda_locked"] = locked
                 }
                 completion(LocalControlResult(status: status, metadata: metadata))
@@ -158,9 +163,337 @@ final class LocalControlBridge {
         }
     }
 
+    private func continueRecovery(completion: @escaping (LocalControlResult) -> Void) {
+        createSession { sessionCode, sessionID in
+            guard sessionCode == 200, let sessionID else {
+                completion(self.failure("session-failed", httpStatus: sessionCode))
+                return
+            }
+            self.findElement(
+                sessionID: sessionID,
+                predicate: "label == 'Continue' AND enabled == 1"
+            ) { findCode, elementID in
+                guard findCode == 200, let elementID else {
+                    completion(self.failure("element-not-found", httpStatus: findCode))
+                    return
+                }
+                self.wdaRequest(
+                    method: "POST",
+                    path: "/session/\(sessionID)/element/\(elementID)/click",
+                    body: [:]
+                ) { clickCode, _ in
+                    guard clickCode == 200 else {
+                        completion(self.failure("wda-http-error", httpStatus: clickCode))
+                        return
+                    }
+                    completion(LocalControlResult(status: "ok", metadata: [
+                        "local_wda_reachable": true,
+                        "wda_http_status": clickCode,
+                        "effect": "recovery-continued",
+                        "control_error": "none",
+                    ]))
+                }
+            }
+        }
+    }
+
+    private func keyboardProbe(completion: @escaping (LocalControlResult) -> Void) {
+        createSession { sessionCode, sessionID in
+            guard sessionCode == 200, let sessionID else {
+                completion(self.failure("session-failed", httpStatus: sessionCode))
+                return
+            }
+            self.prepareKeypad { gateCode, passed in
+                guard passed else {
+                    completion(self.failure("keypad-gate-rejected", httpStatus: gateCode, extra: ["keypad_gate": false]))
+                    return
+                }
+                self.sendHID(sessionID: sessionID, usage: 0x1E, duration: 0.15) { digitCode in
+                    guard digitCode == 200 else {
+                        completion(self.failure("hid-rejected", httpStatus: digitCode, extra: ["keypad_gate": true]))
+                        return
+                    }
+                    self.sendHID(sessionID: sessionID, usage: 0x2A, duration: 0.05) { cleanupCode in
+                        guard cleanupCode == 200 else {
+                            completion(self.failure("hid-rejected", httpStatus: cleanupCode, extra: [
+                                "keypad_gate": true,
+                                "probe_digit_sent": true,
+                                "cleanup_sent": false,
+                            ]))
+                            return
+                        }
+                        completion(LocalControlResult(status: "ok", metadata: [
+                            "local_wda_reachable": true,
+                            "wda_http_status": cleanupCode,
+                            "keypad_gate": true,
+                            "probe_digit_sent": true,
+                            "cleanup_sent": true,
+                            "effect": "keyboard-probe-cleaned",
+                            "control_error": "none",
+                        ]))
+                    }
+                }
+            }
+        }
+    }
+
+    private func secureUnlock(
+        commandID: String,
+        completion: @escaping (LocalControlResult) -> Void
+    ) {
+        guard DevicePasscodeStore.isProvisioned else {
+            completion(failure("passcode-not-provisioned"))
+            return
+        }
+        createSession { sessionCode, sessionID in
+            guard sessionCode == 200, let sessionID else {
+                completion(self.failure("session-failed", httpStatus: sessionCode))
+                return
+            }
+            self.prepareKeypad { gateCode, passed in
+                guard passed else {
+                    completion(self.failure("keypad-gate-rejected", httpStatus: gateCode, extra: ["keypad_gate": false]))
+                    return
+                }
+                guard DevicePasscodeStore.createAndConsumeGate(commandID: commandID) else {
+                    completion(self.failure("gate-file-failed", extra: ["keypad_gate": true]))
+                    return
+                }
+                guard DevicePasscodeStore.markSecretBoundary(commandID: commandID) else {
+                    completion(self.failure("secret-marker-failed", extra: ["keypad_gate": true]))
+                    return
+                }
+                guard let secret = DevicePasscodeStore.readSecretAfterBoundary() else {
+                    completion(self.failure("passcode-not-provisioned", extra: ["keypad_gate": true]))
+                    return
+                }
+                self.sendPasscode(secret, sessionID: sessionID) { sendCode in
+                    guard sendCode == 200 else {
+                        secret.wipe()
+                        completion(self.failure("hid-rejected", httpStatus: sendCode, extra: [
+                            "keypad_gate": true,
+                            "secret_accessed": true,
+                            "effect": "unlock-sent",
+                        ]))
+                        return
+                    }
+                    secret.wipe()
+                    self.callbackQueue.asyncAfter(deadline: .now() + 1) {
+                        self.readLockState { lockCode, locked in
+                            let verified = lockCode == 200 && locked == false
+                            completion(LocalControlResult(status: verified ? "ok" : "error", metadata: [
+                                "local_wda_reachable": lockCode > 0,
+                                "wda_http_status": lockCode,
+                                "keypad_gate": true,
+                                "secret_accessed": true,
+                                "unlock_verified": verified,
+                                "effect": verified ? "unlocked" : "unlock-sent",
+                                "control_error": verified ? "none" : "unlock-not-verified",
+                            ]))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sends ten Backspaces followed by exactly six key usages. Any error ends
+    /// the transaction; callers never retry a secret-bearing command.
+    private func sendPasscode(
+        _ secret: SecretBuffer,
+        sessionID: String,
+        completion: @escaping (Int) -> Void
+    ) {
+        func clear(_ remaining: Int) {
+            guard remaining > 0 else {
+                sendDigit(0)
+                return
+            }
+            sendHID(sessionID: sessionID, usage: 0x2A, duration: 0.03) { code in
+                guard code == 200 else {
+                    completion(code)
+                    return
+                }
+                clear(remaining - 1)
+            }
+        }
+        func sendDigit(_ index: Int) {
+            guard index < secret.bytes.count else {
+                completion(200)
+                return
+            }
+            let byte = secret.bytes[index]
+            let usage = byte == 48 ? 0x27 : 0x1E + Int(byte - 49)
+            sendHID(sessionID: sessionID, usage: usage, duration: 0.15) { code in
+                guard code == 200 else {
+                    completion(code)
+                    return
+                }
+                self.callbackQueue.asyncAfter(deadline: .now() + 0.15) {
+                    sendDigit(index + 1)
+                }
+            }
+        }
+        clear(10)
+    }
+
+    private func prepareKeypad(completion: @escaping (Int, Bool) -> Void) {
+        readLockState { lockCode, locked in
+            guard lockCode == 200, locked == true else {
+                completion(lockCode, false)
+                return
+            }
+            // WDA's unlock helper presses Home twice. With a real passcode it
+            // returns HTTP 500 after its bounded wait, but the keypad side
+            // effect occurs. Source inspection below is the actual gate.
+            self.wdaRequest(method: "POST", path: "/wda/unlock", body: [:]) { _, _ in
+                self.callbackQueue.asyncAfter(deadline: .now() + 0.5) {
+                    self.wdaRequest(method: "GET", path: "/source?format=json", body: nil) { sourceCode, data in
+                        completion(sourceCode, sourceCode == 200 && self.isPasscodeKeypad(data))
+                    }
+                }
+            }
+        }
+    }
+
+    private func createSession(completion: @escaping (Int, String?) -> Void) {
+        let body: [String: Any] = [
+            "capabilities": [
+                "alwaysMatch": ["shouldWaitForQuiescence": false],
+                "firstMatch": [[:]],
+            ],
+        ]
+        wdaRequest(method: "POST", path: "/session", body: body) { code, data in
+            completion(code, code == 200 ? self.sessionID(from: data) : nil)
+        }
+    }
+
+    private func findElement(
+        sessionID: String,
+        predicate: String,
+        completion: @escaping (Int, String?) -> Void
+    ) {
+        guard validIdentifier(sessionID) else {
+            completion(0, nil)
+            return
+        }
+        wdaRequest(
+            method: "POST",
+            path: "/session/\(sessionID)/element",
+            body: ["using": "predicate string", "value": predicate]
+        ) { code, data in
+            completion(code, code == 200 ? self.elementID(from: data) : nil)
+        }
+    }
+
+    private func sendHID(
+        sessionID: String,
+        usage: Int,
+        duration: Double,
+        completion: @escaping (Int) -> Void
+    ) {
+        guard validIdentifier(sessionID), (0...255).contains(usage) else {
+            completion(0)
+            return
+        }
+        wdaRequest(
+            method: "POST",
+            path: "/session/\(sessionID)/wda/performIoHidEvent",
+            body: ["page": 0x07, "usage": usage, "duration": duration]
+        ) { code, _ in
+            completion(code)
+        }
+    }
+
+    private func readLockState(completion: @escaping (Int, Bool?) -> Void) {
+        wdaRequest(method: "GET", path: "/wda/locked", body: nil) { code, data in
+            completion(code, code == 200 ? self.wdaLocked(from: data) : nil)
+        }
+    }
+
+    private func isPasscodeKeypad(_ data: Data?) -> Bool {
+        guard let data,
+              let object = try? JSONSerialization.jsonObject(with: data) else {
+            return false
+        }
+        var labels = Set<String>()
+        collectStrings(object, into: &labels)
+        let digitsPresent = (0...9).allSatisfy { labels.contains(String($0)) }
+        let titlePresent = labels.contains { $0.localizedCaseInsensitiveContains("passcode") }
+        let escapePresent = labels.contains("Emergency") || labels.contains("Cancel")
+        return digitsPresent && titlePresent && escapePresent
+    }
+
+    private func collectStrings(_ value: Any, into output: inout Set<String>) {
+        if let dictionary = value as? [String: Any] {
+            for (key, child) in dictionary {
+                if ["label", "name", "value", "identifier"].contains(key), let text = child as? String {
+                    output.insert(text)
+                }
+                collectStrings(child, into: &output)
+            }
+        } else if let array = value as? [Any] {
+            for child in array {
+                collectStrings(child, into: &output)
+            }
+        }
+    }
+
+    private func sessionID(from data: Data?) -> String? {
+        guard let data,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        if let direct = object["sessionId"] as? String, validIdentifier(direct) {
+            return direct
+        }
+        if let value = object["value"] as? [String: Any],
+           let nested = value["sessionId"] as? String,
+           validIdentifier(nested) {
+            return nested
+        }
+        return nil
+    }
+
+    private func elementID(from data: Data?) -> String? {
+        guard let data,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let value = object["value"] as? [String: Any] else {
+            return nil
+        }
+        for key in ["element-6066-11e4-a52e-4f735466cecf", "ELEMENT"] {
+            if let identifier = value[key] as? String, validIdentifier(identifier) {
+                return identifier
+            }
+        }
+        return nil
+    }
+
+    private func validIdentifier(_ value: String) -> Bool {
+        (8...128).contains(value.count) && value.utf8.allSatisfy {
+            (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45
+        }
+    }
+
+    private func failure(
+        _ error: String,
+        httpStatus: Int = 0,
+        extra: [String: Any] = [:]
+    ) -> LocalControlResult {
+        var metadata: [String: Any] = [
+            "local_wda_reachable": httpStatus > 0,
+            "wda_http_status": httpStatus,
+            "effect": "none",
+            "control_error": error,
+        ]
+        for (key, value) in extra {
+            metadata[key] = value
+        }
+        return LocalControlResult(status: "error", metadata: metadata)
+    }
+
     /// Only fixed relative paths supplied by this type are accepted. Redirects
-    /// are treated as failure because a local bridge must never become an
-    /// arbitrary network proxy.
+    /// are rejected by LocalOnlySessionDelegate.
     private func wdaRequest(
         method: String,
         path: String,
@@ -175,7 +508,7 @@ final class LocalControlBridge {
         }
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.timeoutInterval = 5
+        request.timeoutInterval = 12
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("no-store", forHTTPHeaderField: "Cache-Control")

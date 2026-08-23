@@ -5,6 +5,11 @@ enum KeychainStore {
     private static let service = "com.forwardinfinity.jarvisagent.credentials.v1"
 
     static func read(_ account: String) -> String? {
+        guard let data = readData(account) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func readData(_ account: String) -> Data? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -13,16 +18,20 @@ enum KeychainStore {
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else {
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else {
             return nil
         }
-        return String(data: data, encoding: .utf8)
+        return result as? Data
     }
 
     @discardableResult
     static func write(_ value: String, account: String) -> Bool {
         guard let data = value.data(using: .utf8) else { return false }
+        return writeData(data, account: account)
+    }
+
+    @discardableResult
+    static func writeData(_ data: Data, account: String) -> Bool {
         let identity: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

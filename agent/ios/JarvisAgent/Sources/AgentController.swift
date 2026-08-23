@@ -8,13 +8,16 @@ final class AgentController: ObservableObject {
 
     private let baseURL = URL(string: "https://workbox.tailfd8ac6.ts.net")!
     private let protocolVersion = 1
-    private let agentVersion = "ios-standalone-9"
+    private let agentVersion = "ios-standalone-10"
     private let allowedCommands = Set([
         "ping",
         "refresh-stream",
         "probe-local-control",
         "wda-home",
         "wda-launch-settings",
+        "wda-continue-recovery",
+        "wda-keyboard-probe",
+        "secure-unlock",
     ])
     private let deviceAccount = "device-id"
     private let tokenAccount = "agent-token"
@@ -44,6 +47,7 @@ final class AgentController: ObservableObject {
     @Published private(set) var path = "Checking network"
     @Published private(set) var lastSeen = "Never"
     @Published private(set) var enrolled = false
+    @Published private(set) var unlockProvisioned = DevicePasscodeStore.isProvisioned
 
     private init() {}
 
@@ -85,6 +89,18 @@ final class AgentController: ObservableObject {
             BackgroundLeaseManager.shared.start()
             self.publish(status: "Connecting")
         }
+    }
+
+    @discardableResult
+    func provisionDevicePasscode(_ value: String) -> Bool {
+        let success = DevicePasscodeStore.provision(value)
+        DispatchQueue.main.async { self.unlockProvisioned = DevicePasscodeStore.isProvisioned }
+        return success
+    }
+
+    func removeDevicePasscode() {
+        DevicePasscodeStore.remove()
+        DispatchQueue.main.async { self.unlockProvisioned = false }
     }
 
     func appEnteredBackground() {
@@ -266,7 +282,7 @@ final class AgentController: ObservableObject {
             )
             return
         }
-        LocalControlBridge.shared.perform(action: action) { [weak self] result in
+        LocalControlBridge.shared.perform(action: action, commandID: commandID) { [weak self] result in
             guard let self else { return }
             self.worker.async {
                 self.completeAndSend(
@@ -334,6 +350,11 @@ final class AgentController: ObservableObject {
             "wda_http_status",
             "effect",
             "control_error",
+            "keypad_gate",
+            "probe_digit_sent",
+            "cleanup_sent",
+            "secret_accessed",
+            "unlock_verified",
         ])
         for (key, value) in metadata where allowedMetadata.contains(key) {
             if value is String || value is Int || value is Bool || value is Double {
