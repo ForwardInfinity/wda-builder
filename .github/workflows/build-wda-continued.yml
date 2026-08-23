@@ -83,21 +83,21 @@ jobs:
           grep -q 'JARVIS_WDA_CONTINUED_ACTIVE' /tmp/jarvis-wda.strings
           /usr/libexec/PlistBuddy -c 'Print :BGTaskSchedulerPermittedIdentifiers:0' "$APP/Info.plist" | grep -qx 'com.ios-use.wda.00008101-00064d1a3a68001e.wda-recovery.*'
           cat > "$APP/JarvisAgentBuild.json" <<'JSON'
-          {"agent":"wda-continued-processing","version":2,"wda_commit":"ee029da84448895c4ad51be0688e7b7df30697de"}
+          {"agent":"wda-continued-processing","version":3,"wda_commit":"ee029da84448895c4ad51be0688e7b7df30697de"}
           JSON
           rm -rf Payload
           mkdir Payload
           cp -R "$APP" Payload/
-          /usr/bin/zip -qry WebDriverAgent-Jarvis-Continued-v2.ipa Payload
-          IPA_BYTES="$(stat -f%z WebDriverAgent-Jarvis-Continued-v2.ipa)"
+          /usr/bin/zip -qry WebDriverAgent-Jarvis-Continued-v3.ipa Payload
+          IPA_BYTES="$(stat -f%z WebDriverAgent-Jarvis-Continued-v3.ipa)"
           echo "IPA_BYTES=$IPA_BYTES"
           test "$IPA_BYTES" -gt 100000
-          shasum -a 256 WebDriverAgent-Jarvis-Continued-v2.ipa
+          shasum -a 256 WebDriverAgent-Jarvis-Continued-v3.ipa
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Jarvis-WDA-Continued-v2
-          path: wda/WebDriverAgent-Jarvis-Continued-v2.ipa
+          name: Jarvis-WDA-Continued-v3
+          path: wda/WebDriverAgent-Jarvis-Continued-v3.ipa
           retention-days: 14
           if-no-files-found: error
