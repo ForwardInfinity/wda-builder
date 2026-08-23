@@ -60,13 +60,24 @@ final class RSDRelayManager {
                 return
             }
             self.startWaiters.append(completion)
+            let waiterGeneration = self.generation
+            self.queue.asyncAfter(deadline: .now() + 15) {
+                if self.relayID == nil, self.generation >= waiterGeneration {
+                    self.completeStartWaiters(false)
+                }
+            }
             self.establishIfNeeded()
         }
     }
 
     func ensureStarted(deviceID: String) {
         guard UserDefaults.standard.bool(forKey: enabledKey) else { return }
-        start(deviceID: deviceID) { _ in }
+        queue.async {
+            guard (8...128).contains(deviceID.count) else { return }
+            self.desired = true
+            self.deviceID = deviceID
+            self.establishIfNeeded()
+        }
     }
 
     private func establishIfNeeded() {
@@ -85,29 +96,38 @@ final class RSDRelayManager {
         generation += 1
         let currentGeneration = generation
         let nonce = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        guard let fixedPort = NWEndpoint.Port(rawValue: 49152) else {
+            opening = false
+            scheduleReconnect()
+            return
+        }
         let fixedHost = NWEndpoint.Host(fixedRSDHosts[endpointIndex % fixedRSDHosts.count])
-        let local = NWConnection(host: fixedHost, port: 49152, using: .tcp)
+        let local = NWConnection(host: fixedHost, port: fixedPort, using: .tcp)
         connection = local
-        local.stateUpdateHandler = { [weak self, weak local] state in
-            guard let self, let local else { return }
-            self.queue.async {
-                guard self.generation == currentGeneration, self.connection === local else { return }
-                switch state {
-                case .ready:
-                    self.openServerRelay(
-                        generation: currentGeneration,
-                        nonce: nonce,
-                        deviceID: deviceID,
-                        token: token
-                    )
-                case .failed, .cancelled:
-                    self.restart(generation: currentGeneration)
-                default:
-                    break
-                }
+        local.stateUpdateHandler = { [weak self] state in
+            guard let self,
+                  self.generation == currentGeneration,
+                  self.connection === local else { return }
+            switch state {
+            case .ready:
+                self.openServerRelay(
+                    generation: currentGeneration,
+                    nonce: nonce,
+                    deviceID: deviceID,
+                    token: token
+                )
+            case .failed, .cancelled:
+                self.restart(generation: currentGeneration)
+            default:
+                break
             }
         }
         local.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + 3) {
+            if self.generation == currentGeneration, self.relayID == nil {
+                self.restart(generation: currentGeneration)
+            }
+        }
     }
 
     private func openServerRelay(

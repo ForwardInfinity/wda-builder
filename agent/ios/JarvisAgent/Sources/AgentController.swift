@@ -8,7 +8,7 @@ final class AgentController: ObservableObject {
 
     private let baseURL = URL(string: "https://workbox.tailfd8ac6.ts.net")!
     private let protocolVersion = 1
-    private let agentVersion = "ios-standalone-15"
+    private let agentVersion = "ios-standalone-16"
     private let allowedCommands = Set([
         "ping",
         "refresh-stream",
