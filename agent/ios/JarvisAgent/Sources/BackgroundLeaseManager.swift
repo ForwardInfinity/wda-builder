@@ -1,18 +1,18 @@
 import Foundation
 
-/// Maintains an authenticated, finite long-poll as a background download.
-/// `nsurlsessiond`, not the suspended app process, owns the transfer and
-/// reconnects it across Wi-Fi/cellular changes. Each completed lease schedules
-/// the next one and gives iOS a supported reason to wake the app briefly.
+/// Maintains an authenticated long-lived stream as a background download.
+/// `nsurlsessiond`, not the suspended app process, owns the transfer and can
+/// reconnect it with HTTP Range across Wi-Fi/cellular changes. The VPS records
+/// each streamed tick without depending on iOS to wake the app for every tick.
 final class BackgroundLeaseManager: NSObject, URLSessionDownloadDelegate {
     static let shared = BackgroundLeaseManager()
 
-    private let sessionIdentifier = "com.forwardinfinity.jarvisagent.background-lease.v1"
-    private let endpoint = URL(string: "https://workbox.tailfd8ac6.ts.net/v1/lease")!
-    private let worker = DispatchQueue(label: "com.forwardinfinity.jarvisagent.background-lease")
+    private let sessionIdentifier = "com.forwardinfinity.jarvisagent.background-stream.v1"
+    private let endpoint = URL(string: "https://workbox.tailfd8ac6.ts.net/v1/stream")!
+    private let worker = DispatchQueue(label: "com.forwardinfinity.jarvisagent.background-stream")
     private let delegateQueue: OperationQueue = {
         let queue = OperationQueue()
-        queue.name = "com.forwardinfinity.jarvisagent.background-lease.delegate"
+        queue.name = "com.forwardinfinity.jarvisagent.background-stream.delegate"
         queue.maxConcurrentOperationCount = 1
         return queue
     }()
@@ -29,7 +29,7 @@ final class BackgroundLeaseManager: NSObject, URLSessionDownloadDelegate {
         configuration.allowsConstrainedNetworkAccess = true
         configuration.waitsForConnectivity = true
         configuration.timeoutIntervalForRequest = 60
-        configuration.timeoutIntervalForResource = 5 * 60
+        configuration.timeoutIntervalForResource = 8 * 24 * 60 * 60
         configuration.httpMaximumConnectionsPerHost = 1
         return URLSession(configuration: configuration, delegate: self, delegateQueue: delegateQueue)
     }()
@@ -74,11 +74,11 @@ final class BackgroundLeaseManager: NSObject, URLSessionDownloadDelegate {
             }
             var request = URLRequest(url: self.endpoint)
             request.httpMethod = "GET"
-            request.timeoutInterval = 5 * 60
+            request.timeoutInterval = 8 * 24 * 60 * 60
             request.cachePolicy = .reloadIgnoringLocalCacheData
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             request.setValue(deviceID, forHTTPHeaderField: "X-Jarvis-Device-ID")
-            request.setValue("ios-background-lease-1", forHTTPHeaderField: "X-Jarvis-Agent-Version")
+            request.setValue("ios-background-stream-1", forHTTPHeaderField: "X-Jarvis-Agent-Version")
             request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
             self.session.downloadTask(with: request).resume()
         }
