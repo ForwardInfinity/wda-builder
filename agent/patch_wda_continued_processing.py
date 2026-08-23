@@ -84,6 +84,29 @@ static void JVStartWDAContinuedProcessing(void)
     NSLog(@"JARVIS_WDA_CONTINUED_SUBMITTED ok=%@ code=%ld", submitted ? @"yes" : @"no", (long)error.code);
   }
 }
+
+__attribute__((constructor))
+static void JVWDAInstallForegroundHook(void)
+{
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (UIApplication.sharedApplication.applicationState == UIApplicationStateActive) {
+      JVStartWDAContinuedProcessing();
+      return;
+    }
+    JVWDAForegroundObserver = [NSNotificationCenter.defaultCenter
+      addObserverForName:UIApplicationDidBecomeActiveNotification
+      object:nil
+      queue:NSOperationQueue.mainQueue
+      usingBlock:^(NSNotification *notification) {
+        (void)notification;
+        JVStartWDAContinuedProcessing();
+        if (JVWDAForegroundObserver != nil) {
+          [NSNotificationCenter.defaultCenter removeObserver:JVWDAForegroundObserver];
+          JVWDAForegroundObserver = nil;
+        }
+      }];
+  });
+}
 '''.strip()
 
 
@@ -115,34 +138,6 @@ def main() -> None:
         "// Jarvis iOS 26 patch: no FBFailureProofTestCase import",
         1,
     )
-
-    implementation = "@implementation UITestingUITests"
-    load_method = r'''@implementation UITestingUITests
-
-+ (void)load
-{
-  dispatch_async(dispatch_get_main_queue(), ^{
-    if (UIApplication.sharedApplication.applicationState == UIApplicationStateActive) {
-      JVStartWDAContinuedProcessing();
-      return;
-    }
-    JVWDAForegroundObserver = [NSNotificationCenter.defaultCenter
-      addObserverForName:UIApplicationDidBecomeActiveNotification
-      object:nil
-      queue:NSOperationQueue.mainQueue
-      usingBlock:^(NSNotification *notification) {
-        (void)notification;
-        JVStartWDAContinuedProcessing();
-        if (JVWDAForegroundObserver != nil) {
-          [NSNotificationCenter.defaultCenter removeObserver:JVWDAForegroundObserver];
-          JVWDAForegroundObserver = nil;
-        }
-      }];
-  });
-}'''
-    if text.count(implementation) != 1:
-        raise RuntimeError("UITestingUITests implementation anchor missing")
-    text = text.replace(implementation, load_method, 1)
 
     serving = "  [webServer startServing];"
     if text.count(serving) != 1:
