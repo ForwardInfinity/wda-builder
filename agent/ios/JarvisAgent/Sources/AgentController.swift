@@ -8,7 +8,7 @@ final class AgentController: ObservableObject {
 
     private let baseURL = URL(string: "https://workbox.tailfd8ac6.ts.net")!
     private let protocolVersion = 1
-    private let agentVersion = "ios-standalone-14"
+    private let agentVersion = "ios-standalone-15"
     private let allowedCommands = Set([
         "ping",
         "refresh-stream",
@@ -376,6 +376,7 @@ final class AgentController: ObservableObject {
             "cleanup_sent",
             "secret_accessed",
             "unlock_verified",
+            "rsd_relay_started",
         ])
         for (key, value) in metadata where allowedMetadata.contains(key) {
             if value is String || value is Int || value is Bool || value is Double {

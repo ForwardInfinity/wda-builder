@@ -13,6 +13,7 @@ final class RSDRelayManager {
     private let queue = DispatchQueue(label: "com.forwardinfinity.jarvisagent.rsd-relay")
     private let maxChunkBytes = 64 * 1024
     private let maxQueuedBytes = 1024 * 1024
+    private let fixedRSDHosts = ["::1", "100.111.210.58", "127.0.0.1"]
 
     private lazy var session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
@@ -41,6 +42,7 @@ final class RSDRelayManager {
     private var downstreamInFlight = false
     private var reconnectWorkItem: DispatchWorkItem?
     private var startWaiters: [(Bool) -> Void] = []
+    private var endpointIndex = 0
 
     private init() {}
 
@@ -83,7 +85,8 @@ final class RSDRelayManager {
         generation += 1
         let currentGeneration = generation
         let nonce = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
-        let local = NWConnection(host: "127.0.0.1", port: 49152, using: .tcp)
+        let fixedHost = NWEndpoint.Host(fixedRSDHosts[endpointIndex % fixedRSDHosts.count])
+        let local = NWConnection(host: fixedHost, port: 49152, using: .tcp)
         connection = local
         local.stateUpdateHandler = { [weak self, weak local] state in
             guard let self, let local else { return }
@@ -282,6 +285,7 @@ final class RSDRelayManager {
         connection?.stateUpdateHandler = nil
         connection?.cancel()
         connection = nil
+        endpointIndex = (endpointIndex + 1) % fixedRSDHosts.count
         scheduleReconnect()
     }
 
