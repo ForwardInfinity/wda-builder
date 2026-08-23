@@ -71,11 +71,13 @@ final class AgentController: ObservableObject {
             timer.setEventHandler { [weak self] in self?.tick() }
             self.timer = timer
             timer.resume()
+            BackgroundLeaseManager.shared.start()
             self.publish(status: "Connecting")
         }
     }
 
     func appEnteredBackground() {
+        BackgroundLeaseManager.shared.start()
         scheduleBackgroundRefresh()
         worker.async {
             guard self.backgroundTask == .invalid else { return }
@@ -132,7 +134,7 @@ final class AgentController: ObservableObject {
         if isEnrollment {
             payload["client"] = "jarvis-wda"
         } else {
-            payload["agent_version"] = "ios-standalone-1"
+            payload["agent_version"] = "ios-standalone-2"
             payload["bundle"] = Bundle.main.bundleIdentifier ?? "unknown"
             payload["os"] = UIDevice.current.systemVersion
             payload["uptime"] = ProcessInfo.processInfo.systemUptime
@@ -181,6 +183,7 @@ final class AgentController: ObservableObject {
                     }
                     self.publish(enrolled: true)
                     self.publish(status: "Enrolled; authenticating")
+                    BackgroundLeaseManager.shared.start()
                     self.tick()
                     completion(true)
                     return

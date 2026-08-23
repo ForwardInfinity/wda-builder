@@ -28,6 +28,17 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         AgentController.shared.appBecameActive()
     }
 
+    func application(
+        _ application: UIApplication,
+        handleEventsForBackgroundURLSession identifier: String,
+        completionHandler: @escaping () -> Void
+    ) {
+        BackgroundLeaseManager.shared.handleEvents(
+            identifier: identifier,
+            completionHandler: completionHandler
+        )
+    }
+
     static func scheduleRefresh() {
         let request = BGAppRefreshTaskRequest(identifier: refreshIdentifier)
         request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
