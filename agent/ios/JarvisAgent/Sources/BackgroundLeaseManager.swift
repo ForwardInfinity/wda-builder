@@ -21,6 +21,7 @@ final class BackgroundLeaseManager: NSObject, URLSessionDownloadDelegate {
     }()
     private var scheduling = false
     private var successfulTasks = Set<Int>()
+    private var ignoredCompletionTasks = Set<Int>()
     private var eventsCompletionHandler: (() -> Void)?
 
     private lazy var session: URLSession = {
@@ -64,6 +65,21 @@ final class BackgroundLeaseManager: NSObject, URLSessionDownloadDelegate {
                                 description: String(format: "recovery-%03d", slot)
                             )
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    func forceReconnect() {
+        worker.async {
+            self.session.getAllTasks { tasks in
+                self.worker.async {
+                    self.ignoredCompletionTasks.formUnion(tasks.map(\.taskIdentifier))
+                    tasks.forEach { $0.cancel() }
+                    self.worker.asyncAfter(deadline: .now() + 1) {
+                        guard let request = self.makeRequest() else { return }
+                        self.enqueue(request: request, delay: 0, description: "primary")
                     }
                 }
             }
@@ -138,6 +154,10 @@ final class BackgroundLeaseManager: NSObject, URLSessionDownloadDelegate {
         didCompleteWithError error: Error?
     ) {
         worker.async {
+            if self.ignoredCompletionTasks.remove(task.taskIdentifier) != nil {
+                self.successfulTasks.remove(task.taskIdentifier)
+                return
+            }
             let succeeded = error == nil && self.successfulTasks.remove(task.taskIdentifier) != nil
             if task.taskDescription?.hasPrefix("recovery-") == true {
                 return

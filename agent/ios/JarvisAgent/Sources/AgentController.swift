@@ -143,7 +143,7 @@ final class AgentController: ObservableObject {
         if isEnrollment {
             payload["client"] = "jarvis-wda"
         } else {
-            payload["agent_version"] = "ios-standalone-7"
+            payload["agent_version"] = "ios-standalone-8"
             payload["bundle"] = Bundle.main.bundleIdentifier ?? "unknown"
             payload["network"] = UserDefaults.standard.string(forKey: "jarvis-network") ?? "Unknown"
             payload["os"] = UIDevice.current.systemVersion
@@ -221,7 +221,7 @@ final class AgentController: ObservableObject {
         }
         commandInFlight = commandID
         if action == "refresh-stream" {
-            BackgroundLeaseManager.shared.start()
+            BackgroundLeaseManager.shared.forceReconnect()
         }
         sendCommandResult(commandID: commandID, action: action)
     }
@@ -236,7 +236,7 @@ final class AgentController: ObservableObject {
             "command_id": commandID,
             "action": action,
             "status": "ok",
-            "agent_version": "ios-standalone-7",
+            "agent_version": "ios-standalone-8",
             "network": UserDefaults.standard.string(forKey: "jarvis-network") ?? "Unknown",
             "uptime": ProcessInfo.processInfo.systemUptime,
         ]
