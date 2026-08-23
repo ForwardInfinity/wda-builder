@@ -1,4 +1,4 @@
-name: Build standalone Jarvis iOS agent
+name: Build Jarvis WDA continued runner
 
 on:
   workflow_dispatch:
@@ -9,44 +9,53 @@ permissions:
 jobs:
   build:
     runs-on: macos-15
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
-      - name: Checkout builder
+      - name: Checkout Jarvis builder inputs
         uses: actions/checkout@v4
+        with:
+          path: builder
+
+      - name: Checkout pinned WebDriverAgent
+        uses: actions/checkout@v4
+        with:
+          repository: appium/WebDriverAgent
+          ref: ee029da84448895c4ad51be0688e7b7df30697de
+          submodules: true
+          path: wda
 
       - name: Setup Xcode 26
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: '26'
 
-      - name: Show iOS 26 BackgroundTasks declarations
-        run: |
-          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-          grep -R -n -A 100 -B 10 'BGContinuedProcessing' "$SDK/System/Library/Frameworks/BackgroundTasks.framework/Headers"
-
-      - name: Install XcodeGen
-        run: |
-          if ! command -v xcodegen >/dev/null; then
-            brew install xcodegen
-          fi
-          xcodegen --version
-
-      - name: Generate project
-        working-directory: agent/ios/JarvisAgent
+      - name: Patch continued processing
         run: |
           set -euo pipefail
-          xcodegen generate
-          xcodebuild -project JarvisAgent.xcodeproj -scheme JarvisAgent -showBuildSettings >/tmp/build-settings.txt
-          grep -q 'PRODUCT_BUNDLE_IDENTIFIER = com.forwardinfinity.jarvisagent' /tmp/build-settings.txt
-          ! grep -R -E 'Bearer [A-Za-z0-9_-]{20,}|ntfy-topic|jarvis/passcode' Sources
+          python3 builder/agent/patch_wda_continued_processing.py wda
+          grep -n 'JARVIS_WDA_CONTINUED_SUBMITTED' wda/WebDriverAgentRunner/UITestingUITests.m
+          grep -n 'XCTestCase <FBWebServerDelegate>' wda/WebDriverAgentRunner/UITestingUITests.m
+          ! grep -R -E 'Bearer [A-Za-z0-9_-]{20,}|ntfy-topic|/root/.config/jarvis/passcode' builder/agent
 
-      - name: Build unsigned arm64 app
-        working-directory: agent/ios/JarvisAgent
+      - name: Show versions
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Bootstrap WDA
+        working-directory: wda
+        run: |
+          if [ -f ./Scripts/bootstrap.sh ]; then
+            bash ./Scripts/bootstrap.sh -d
+          fi
+
+      - name: Build unsigned arm64 WDA
+        working-directory: wda
         run: |
           set -euo pipefail
           xcodebuild \
-            -project JarvisAgent.xcodeproj \
-            -scheme JarvisAgent \
+            -project WebDriverAgent.xcodeproj \
+            -scheme WebDriverAgentRunner \
             -sdk iphoneos \
             -configuration Release \
             -destination generic/platform=iOS \
@@ -56,46 +65,39 @@ jobs:
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO \
             ASSETCATALOG_COMPILER_APPICON_NAME= \
+            ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS=NO \
             clean build \
             CONFIGURATION_BUILD_DIR="$PWD/build"
 
       - name: Verify and package
-        working-directory: agent/ios/JarvisAgent
+        working-directory: wda
         run: |
           set -euo pipefail
-          APP="$PWD/build/JarvisAgent.app"
-          BIN="$APP/JarvisAgent"
-          test -x "$BIN"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist" | grep -qx com.forwardinfinity.jarvisagent
-          /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes:0' "$APP/Info.plist" | grep -qx fetch
-          /usr/libexec/PlistBuddy -c 'Print :NSAppTransportSecurity:NSAllowsLocalNetworking' "$APP/Info.plist" | grep -qx true
-          strings "$BIN" > /tmp/jarvis-agent.strings
-          grep -q 'workbox.tailfd8ac6.ts.net' /tmp/jarvis-agent.strings
-          grep -q 'ios-standalone-16' /tmp/jarvis-agent.strings
-          grep -q 'ios-background-stream-2' /tmp/jarvis-agent.strings
-          grep -q 'Jarvis cellular recovery' /tmp/jarvis-agent.strings
-          grep -q 'probe-local-control' /tmp/jarvis-agent.strings
-          grep -q 'wda-launch-settings' /tmp/jarvis-agent.strings
-          grep -q 'wda-keyboard-probe' /tmp/jarvis-agent.strings
-          grep -q 'secure-unlock' /tmp/jarvis-agent.strings
-          grep -q 'start-rsd-relay' /tmp/jarvis-agent.strings
-          grep -q '/v1/rsd-relay/open' /tmp/jarvis-agent.strings
+          APP="$PWD/build/WebDriverAgentRunner-Runner.app"
+          test -x "$APP/WebDriverAgentRunner-Runner"
+          AGENT_BIN="$APP/PlugIns/WebDriverAgentRunner.xctest/WebDriverAgentRunner"
+          test -x "$AGENT_BIN"
+          python3 ../builder/agent/patch_wda_runner_info.py "$APP"
+          strings "$AGENT_BIN" > /tmp/jarvis-wda.strings
+          grep -q 'JARVIS_WDA_CONTINUED_SUBMITTED' /tmp/jarvis-wda.strings
+          grep -q 'JARVIS_WDA_CONTINUED_ACTIVE' /tmp/jarvis-wda.strings
+          /usr/libexec/PlistBuddy -c 'Print :BGTaskSchedulerPermittedIdentifiers:0' "$APP/Info.plist" | grep -qx 'com.ios-use.wda.00008101-00064d1a3a68001e.wda-recovery.*'
           cat > "$APP/JarvisAgentBuild.json" <<'JSON'
-          {"agent":"standalone-reverse-control","version":16,"channel":"ios26-fixed-rsd-relay-secure-unlock"}
+          {"agent":"wda-continued-processing","version":1,"wda_commit":"ee029da84448895c4ad51be0688e7b7df30697de"}
           JSON
           rm -rf Payload
           mkdir Payload
           cp -R "$APP" Payload/
-          /usr/bin/zip -qry JarvisAgent-unsigned-v16.ipa Payload
-          BYTES="$(stat -f%z JarvisAgent-unsigned-v16.ipa)"
-          echo "IPA_BYTES=$BYTES"
-          test "$BYTES" -gt 50000
-          shasum -a 256 JarvisAgent-unsigned-v16.ipa
+          /usr/bin/zip -qry WebDriverAgent-Jarvis-Continued-v1.ipa Payload
+          IPA_BYTES="$(stat -f%z WebDriverAgent-Jarvis-Continued-v1.ipa)"
+          echo "IPA_BYTES=$IPA_BYTES"
+          test "$IPA_BYTES" -gt 100000
+          shasum -a 256 WebDriverAgent-Jarvis-Continued-v1.ipa
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: JarvisAgent-unsigned-v16
-          path: agent/ios/JarvisAgent/JarvisAgent-unsigned-v16.ipa
+          name: Jarvis-WDA-Continued-v1
+          path: wda/WebDriverAgent-Jarvis-Continued-v1.ipa
           retention-days: 14
           if-no-files-found: error
