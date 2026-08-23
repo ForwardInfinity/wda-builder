@@ -8,6 +8,14 @@ final class AgentController: ObservableObject {
 
     private let baseURL = URL(string: "https://workbox.tailfd8ac6.ts.net")!
     private let protocolVersion = 1
+    private let agentVersion = "ios-standalone-9"
+    private let allowedCommands = Set([
+        "ping",
+        "refresh-stream",
+        "probe-local-control",
+        "wda-home",
+        "wda-launch-settings",
+    ])
     private let deviceAccount = "device-id"
     private let tokenAccount = "agent-token"
     private let worker = DispatchQueue(label: "com.forwardinfinity.jarvisagent.worker")
@@ -143,7 +151,7 @@ final class AgentController: ObservableObject {
         if isEnrollment {
             payload["client"] = "jarvis-wda"
         } else {
-            payload["agent_version"] = "ios-standalone-8"
+            payload["agent_version"] = agentVersion
             payload["bundle"] = Bundle.main.bundleIdentifier ?? "unknown"
             payload["network"] = UserDefaults.standard.string(forKey: "jarvis-network") ?? "Unknown"
             payload["os"] = UIDevice.current.systemVersion
@@ -215,31 +223,123 @@ final class AgentController: ObservableObject {
               let commandID = command["id"] as? String,
               commandID.count == 32,
               let action = command["action"] as? String,
-              ["ping", "refresh-stream"].contains(action),
+              allowedCommands.contains(action),
               commandInFlight != commandID else {
             return
         }
         commandInFlight = commandID
-        if action == "refresh-stream" {
-            BackgroundLeaseManager.shared.forceReconnect()
+
+        switch CommandJournal.prepare(commandID: commandID, action: action) {
+        case let .replay(status, metadata):
+            sendCommandResult(commandID: commandID, action: action, status: status, metadata: metadata)
+        case .ambiguous:
+            completeAndSend(
+                commandID: commandID,
+                action: action,
+                status: "error",
+                metadata: ["control_error": "ambiguous-state", "effect": "none"]
+            )
+        case .unavailable:
+            sendCommandResult(
+                commandID: commandID,
+                action: action,
+                status: "error",
+                metadata: ["control_error": "journal-unavailable", "effect": "none"]
+            )
+        case .execute:
+            executeCommand(commandID: commandID, action: action)
         }
-        sendCommandResult(commandID: commandID, action: action)
     }
 
-    private func sendCommandResult(commandID: String, action: String) {
+    private func executeCommand(commandID: String, action: String) {
+        if action == "ping" {
+            completeAndSend(commandID: commandID, action: action, status: "ok", metadata: [:])
+            return
+        }
+        if action == "refresh-stream" {
+            BackgroundLeaseManager.shared.forceReconnect()
+            completeAndSend(
+                commandID: commandID,
+                action: action,
+                status: "ok",
+                metadata: ["effect": "stream-refresh-requested", "control_error": "none"]
+            )
+            return
+        }
+        LocalControlBridge.shared.perform(action: action) { [weak self] result in
+            guard let self else { return }
+            self.worker.async {
+                self.completeAndSend(
+                    commandID: commandID,
+                    action: action,
+                    status: result.status,
+                    metadata: result.metadata
+                )
+            }
+        }
+    }
+
+    private func completeAndSend(
+        commandID: String,
+        action: String,
+        status: String,
+        metadata: [String: Any]
+    ) {
+        var finalStatus = status
+        var finalMetadata = metadata
+        if !CommandJournal.complete(
+            commandID: commandID,
+            action: action,
+            status: status,
+            metadata: metadata
+        ) {
+            // The pre-action marker remains durable, so a repeated delivery
+            // fails ambiguous rather than executing the effect a second time.
+            finalStatus = "error"
+            finalMetadata["control_error"] = "journal-completion-failed"
+        }
+        sendCommandResult(
+            commandID: commandID,
+            action: action,
+            status: finalStatus,
+            metadata: finalMetadata
+        )
+    }
+
+    private func sendCommandResult(
+        commandID: String,
+        action: String,
+        status: String,
+        metadata: [String: Any]
+    ) {
         guard let token = KeychainStore.read(tokenAccount) else {
             commandInFlight = nil
             return
         }
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "device_id": deviceID,
             "command_id": commandID,
             "action": action,
-            "status": "ok",
-            "agent_version": "ios-standalone-8",
+            "status": status,
+            "agent_version": agentVersion,
             "network": UserDefaults.standard.string(forKey: "jarvis-network") ?? "Unknown",
             "uptime": ProcessInfo.processInfo.systemUptime,
         ]
+        let allowedMetadata = Set([
+            "local_wda_reachable",
+            "wda_ready",
+            "wda_locked",
+            "local_rsd_v4",
+            "local_rsd_v6",
+            "wda_http_status",
+            "effect",
+            "control_error",
+        ])
+        for (key, value) in metadata where allowedMetadata.contains(key) {
+            if value is String || value is Int || value is Bool || value is Double {
+                payload[key] = value
+            }
+        }
         var request = URLRequest(url: baseURL.appendingPathComponent("/v1/result"))
         request.httpMethod = "POST"
         request.timeoutInterval = 15
