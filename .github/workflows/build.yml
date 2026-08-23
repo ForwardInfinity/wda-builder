@@ -76,7 +76,8 @@ jobs:
           set -euo pipefail
           APP="$PWD/build/WebDriverAgentRunner-Runner.app"
           test -x "$APP/WebDriverAgentRunner-Runner"
-          strings "$APP/WebDriverAgentRunner-Runner" | grep -q 'JarvisAgent phase1 started'
+          strings "$APP/WebDriverAgentRunner-Runner" > /tmp/jarvis-wda.strings
+          grep -q 'JarvisAgent phase1 started' /tmp/jarvis-wda.strings
           cat > "$APP/JarvisAgentBuild.json" <<'JSON'
           {"agent":"reverse-heartbeat","version":1,"wda_commit":"ee029da84448895c4ad51be0688e7b7df30697de"}
           JSON
