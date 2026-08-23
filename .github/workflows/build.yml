@@ -22,7 +22,7 @@ jobs:
       - name: Show iOS 26 BackgroundTasks declarations
         run: |
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-          grep -n -A 100 -B 10 'BGContinuedProcessing' "$SDK/System/Library/Frameworks/BackgroundTasks.framework/Headers/BackgroundTasks.h"
+          grep -R -n -A 100 -B 10 'BGContinuedProcessing' "$SDK/System/Library/Frameworks/BackgroundTasks.framework/Headers"
 
       - name: Install XcodeGen
         run: |
