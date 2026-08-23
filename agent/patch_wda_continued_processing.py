@@ -7,14 +7,15 @@ import argparse
 from pathlib import Path
 
 MARKER = "// Jarvis WDA continued-processing v1."
-CALL = "  JVStartWDAContinuedProcessing();"
+CALL = "  JVEnsureWDAContinuedProcessing();"
 
 SNIPPET = r'''
 // Jarvis WDA continued-processing v1.
 static BGContinuedProcessingTask *JVWDAContinuedTask;
 static dispatch_source_t JVWDAProgressTimer;
 static id JVWDAForegroundObserver;
-static BOOL JVWDAContinuedStarted;
+static NSString *JVWDARequestIdentifier;
+static NSInteger JVWDAContinuedAttempts;
 
 static void JVStopWDAProgressTimer(void)
 {
@@ -24,15 +25,21 @@ static void JVStopWDAProgressTimer(void)
   }
 }
 
-static void JVStartWDAContinuedProcessing(void)
+static void JVSubmitWDAContinuedProcessing(void)
 {
-  if (JVWDAContinuedStarted) {
+  if (JVWDAContinuedTask != nil || JVWDAContinuedAttempts >= 2) {
     return;
   }
-  JVWDAContinuedStarted = YES;
+  JVWDAContinuedAttempts += 1;
+  [NSUserDefaults.standardUserDefaults setInteger:JVWDAContinuedAttempts forKey:@"jarvis.wda.continued.attempts"];
+  [NSUserDefaults.standardUserDefaults setInteger:UIApplication.sharedApplication.applicationState forKey:@"jarvis.wda.continued.submitState"];
   if (@available(iOS 26.0, *)) {
+    if (JVWDARequestIdentifier != nil) {
+      [BGTaskScheduler.sharedScheduler cancelTaskRequestWithIdentifier:JVWDARequestIdentifier];
+    }
     NSString *bundleIdentifier = NSBundle.mainBundle.bundleIdentifier;
     NSString *identifier = [NSString stringWithFormat:@"%@.wda-recovery.%@", bundleIdentifier, NSUUID.UUID.UUIDString.lowercaseString];
+    JVWDARequestIdentifier = identifier;
     BOOL registered = [BGTaskScheduler.sharedScheduler
       registerForTaskWithIdentifier:identifier
       usingQueue:dispatch_get_main_queue()
@@ -80,7 +87,7 @@ static void JVStartWDAContinuedProcessing(void)
       initWithIdentifier:identifier
       title:@"Jarvis UI control"
       subtitle:@"Maintaining the local automation channel"];
-    request.strategy = BGContinuedProcessingTaskRequestSubmissionStrategyQueue;
+    request.strategy = BGContinuedProcessingTaskRequestSubmissionStrategyFail;
     request.requiredResources = BGContinuedProcessingTaskRequestResourcesDefault;
     NSError *error = nil;
     BOOL submitted = [BGTaskScheduler.sharedScheduler submitTaskRequest:request error:&error];
@@ -90,14 +97,26 @@ static void JVStartWDAContinuedProcessing(void)
   }
 }
 
+static void JVEnsureWDAContinuedProcessing(void)
+{
+  if (JVWDAContinuedAttempts == 0) {
+    JVSubmitWDAContinuedProcessing();
+  }
+}
+
 __attribute__((constructor))
 static void JVWDAInstallForegroundHook(void)
 {
   [NSUserDefaults.standardUserDefaults setBool:YES forKey:@"jarvis.wda.continued.hook"];
+  [NSUserDefaults.standardUserDefaults setBool:NO forKey:@"jarvis.wda.continued.registered"];
+  [NSUserDefaults.standardUserDefaults setBool:NO forKey:@"jarvis.wda.continued.submitted"];
+  [NSUserDefaults.standardUserDefaults setBool:NO forKey:@"jarvis.wda.continued.active"];
+  [NSUserDefaults.standardUserDefaults setInteger:0 forKey:@"jarvis.wda.continued.error"];
+  [NSUserDefaults.standardUserDefaults setInteger:0 forKey:@"jarvis.wda.continued.attempts"];
   dispatch_async(dispatch_get_main_queue(), ^{
     [NSUserDefaults.standardUserDefaults setInteger:UIApplication.sharedApplication.applicationState forKey:@"jarvis.wda.continued.appState"];
     if (UIApplication.sharedApplication.applicationState == UIApplicationStateActive) {
-      JVStartWDAContinuedProcessing();
+      JVSubmitWDAContinuedProcessing();
       return;
     }
     JVWDAForegroundObserver = [NSNotificationCenter.defaultCenter
@@ -106,7 +125,7 @@ static void JVWDAInstallForegroundHook(void)
       queue:NSOperationQueue.mainQueue
       usingBlock:^(NSNotification *notification) {
         (void)notification;
-        JVStartWDAContinuedProcessing();
+        JVSubmitWDAContinuedProcessing();
         if (JVWDAForegroundObserver != nil) {
           [NSNotificationCenter.defaultCenter removeObserver:JVWDAForegroundObserver];
           JVWDAForegroundObserver = nil;
@@ -156,6 +175,8 @@ def main() -> None:
   [buildInfo setObject:@{
     @"hook" : @([jarvisDefaults boolForKey:@"jarvis.wda.continued.hook"]),
     @"appState" : @([jarvisDefaults integerForKey:@"jarvis.wda.continued.appState"]),
+    @"submitState" : @([jarvisDefaults integerForKey:@"jarvis.wda.continued.submitState"]),
+    @"attempts" : @([jarvisDefaults integerForKey:@"jarvis.wda.continued.attempts"]),
     @"registered" : @([jarvisDefaults boolForKey:@"jarvis.wda.continued.registered"]),
     @"submitted" : @([jarvisDefaults boolForKey:@"jarvis.wda.continued.submitted"]),
     @"error" : @([jarvisDefaults integerForKey:@"jarvis.wda.continued.error"]),
@@ -172,7 +193,7 @@ def main() -> None:
     text = text.replace(serving, f"{CALL}\n{serving}", 1)
     test_file.write_text(text, encoding="utf-8")
     result = test_file.read_text(encoding="utf-8")
-    for expected in (MARKER, CALL, fallback, "BGContinuedProcessingTaskRequestSubmissionStrategyQueue"):
+    for expected in (MARKER, CALL, fallback, "BGContinuedProcessingTaskRequestSubmissionStrategyFail"):
         if expected not in result:
             raise RuntimeError(f"post-patch marker missing: {expected}")
     print(f"JARVIS_WDA_CONTINUED_PATCHED file={test_file}")
