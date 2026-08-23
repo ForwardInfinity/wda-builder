@@ -8,7 +8,7 @@ final class AgentController: ObservableObject {
 
     private let baseURL = URL(string: "https://workbox.tailfd8ac6.ts.net")!
     private let protocolVersion = 1
-    private let agentVersion = "ios-standalone-13"
+    private let agentVersion = "ios-standalone-14"
     private let allowedCommands = Set([
         "ping",
         "refresh-stream",
@@ -18,6 +18,7 @@ final class AgentController: ObservableObject {
         "wda-continue-recovery",
         "wda-keyboard-probe",
         "secure-unlock",
+        "start-rsd-relay",
     ])
     private let deviceAccount = "device-id"
     private let tokenAccount = "agent-token"
@@ -87,6 +88,7 @@ final class AgentController: ObservableObject {
             self.timer = timer
             timer.resume()
             BackgroundLeaseManager.shared.start()
+            RSDRelayManager.shared.ensureStarted(deviceID: self.deviceID)
             self.publish(status: "Connecting")
         }
     }
@@ -123,6 +125,7 @@ final class AgentController: ObservableObject {
 
     func continuedRecoveryPulse() {
         BackgroundLeaseManager.shared.start()
+        RSDRelayManager.shared.ensureStarted(deviceID: deviceID)
         worker.async { self.tick() }
     }
 
@@ -280,6 +283,24 @@ final class AgentController: ObservableObject {
                 status: "ok",
                 metadata: ["effect": "stream-refresh-requested", "control_error": "none"]
             )
+            return
+        }
+        if action == "start-rsd-relay" {
+            RSDRelayManager.shared.start(deviceID: deviceID) { [weak self] started in
+                guard let self else { return }
+                self.worker.async {
+                    self.completeAndSend(
+                        commandID: commandID,
+                        action: action,
+                        status: started ? "ok" : "error",
+                        metadata: [
+                            "rsd_relay_started": started,
+                            "effect": started ? "rsd-relay-started" : "none",
+                            "control_error": started ? "none" : "rsd-relay-unavailable",
+                        ]
+                    )
+                }
+            }
             return
         }
         LocalControlBridge.shared.perform(action: action, commandID: commandID) { [weak self] result in

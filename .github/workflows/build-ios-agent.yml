@@ -66,29 +66,31 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :NSAppTransportSecurity:NSAllowsLocalNetworking' "$APP/Info.plist" | grep -qx true
           strings "$BIN" > /tmp/jarvis-agent.strings
           grep -q 'workbox.tailfd8ac6.ts.net' /tmp/jarvis-agent.strings
-          grep -q 'ios-standalone-13' /tmp/jarvis-agent.strings
+          grep -q 'ios-standalone-14' /tmp/jarvis-agent.strings
           grep -q 'ios-background-stream-2' /tmp/jarvis-agent.strings
           grep -q 'Jarvis cellular recovery' /tmp/jarvis-agent.strings
           grep -q 'probe-local-control' /tmp/jarvis-agent.strings
           grep -q 'wda-launch-settings' /tmp/jarvis-agent.strings
           grep -q 'wda-keyboard-probe' /tmp/jarvis-agent.strings
           grep -q 'secure-unlock' /tmp/jarvis-agent.strings
+          grep -q 'start-rsd-relay' /tmp/jarvis-agent.strings
+          grep -q '/v1/rsd-relay/open' /tmp/jarvis-agent.strings
           cat > "$APP/JarvisAgentBuild.json" <<'JSON'
-          {"agent":"standalone-reverse-control","version":13,"channel":"ios26-local-wda-secure-unlock"}
+          {"agent":"standalone-reverse-control","version":14,"channel":"ios26-fixed-rsd-relay-secure-unlock"}
           JSON
           rm -rf Payload
           mkdir Payload
           cp -R "$APP" Payload/
-          /usr/bin/zip -qry JarvisAgent-unsigned-v13.ipa Payload
-          BYTES="$(stat -f%z JarvisAgent-unsigned-v13.ipa)"
+          /usr/bin/zip -qry JarvisAgent-unsigned-v14.ipa Payload
+          BYTES="$(stat -f%z JarvisAgent-unsigned-v14.ipa)"
           echo "IPA_BYTES=$BYTES"
           test "$BYTES" -gt 50000
-          shasum -a 256 JarvisAgent-unsigned-v13.ipa
+          shasum -a 256 JarvisAgent-unsigned-v14.ipa
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: JarvisAgent-unsigned-v13
-          path: agent/ios/JarvisAgent/JarvisAgent-unsigned-v13.ipa
+          name: JarvisAgent-unsigned-v14
+          path: agent/ios/JarvisAgent/JarvisAgent-unsigned-v14.ipa
           retention-days: 14
           if-no-files-found: error
