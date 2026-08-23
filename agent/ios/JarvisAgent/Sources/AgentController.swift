@@ -59,10 +59,12 @@ final class AgentController: ObservableObject {
                 } else if path.usesInterfaceType(.wifi) {
                     interface = "Wi-Fi"
                 } else if path.usesInterfaceType(.wiredEthernet) {
-                    interface = "Wired"
+                    interface = "Ethernet"
                 } else {
                     interface = "Other"
                 }
+                let network = path.status == .satisfied ? interface : "Offline"
+                UserDefaults.standard.set(network, forKey: "jarvis-network")
                 self?.publish(path: "\(path.status == .satisfied ? "Online" : "Offline") · \(interface)")
             }
             self.pathMonitor.start(queue: self.worker)
@@ -90,6 +92,7 @@ final class AgentController: ObservableObject {
     }
 
     func appBecameActive() {
+        BackgroundLeaseManager.shared.start()
         worker.async { self.tick() }
     }
 
@@ -134,8 +137,9 @@ final class AgentController: ObservableObject {
         if isEnrollment {
             payload["client"] = "jarvis-wda"
         } else {
-            payload["agent_version"] = "ios-standalone-3"
+            payload["agent_version"] = "ios-standalone-4"
             payload["bundle"] = Bundle.main.bundleIdentifier ?? "unknown"
+            payload["network"] = UserDefaults.standard.string(forKey: "jarvis-network") ?? "Unknown"
             payload["os"] = UIDevice.current.systemVersion
             payload["uptime"] = ProcessInfo.processInfo.systemUptime
         }

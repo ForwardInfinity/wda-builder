@@ -1,14 +1,17 @@
 import Foundation
 
 /// Maintains an authenticated long-lived stream as a background download.
-/// `nsurlsessiond`, not the suspended app process, owns the transfer and can
-/// reconnect it with HTTP Range across Wi-Fi/cellular changes. The VPS records
-/// each streamed tick without depending on iOS to wake the app for every tick.
+/// `nsurlsessiond`, not the suspended app process, owns each task. In addition
+/// to the active stream, a bounded set of future background tasks is submitted
+/// up front. If iOS defers the active task's failure callback, a pre-submitted
+/// recovery slot can still establish a fresh stream without running app code.
 final class BackgroundLeaseManager: NSObject, URLSessionDownloadDelegate {
     static let shared = BackgroundLeaseManager()
 
-    private let sessionIdentifier = "com.forwardinfinity.jarvisagent.background-stream.v1"
+    private let sessionIdentifier = "com.forwardinfinity.jarvisagent.background-stream.v2"
     private let endpoint = URL(string: "https://workbox.tailfd8ac6.ts.net/v1/stream")!
+    private let recoverySlotCount = 24
+    private let recoverySlotSpacing: TimeInterval = 30
     private let worker = DispatchQueue(label: "com.forwardinfinity.jarvisagent.background-stream")
     private let delegateQueue: OperationQueue = {
         let queue = OperationQueue()
@@ -44,9 +47,23 @@ final class BackgroundLeaseManager: NSObject, URLSessionDownloadDelegate {
             self.scheduling = true
             self.session.getAllTasks { tasks in
                 self.worker.async {
-                    self.scheduling = false
-                    if tasks.isEmpty {
-                        self.schedule(after: 0)
+                    defer { self.scheduling = false }
+                    guard let request = self.makeRequest() else { return }
+                    let hasPrimary = tasks.contains { $0.taskDescription == "primary" }
+                    let hasRecoverySlots = tasks.contains {
+                        $0.taskDescription?.hasPrefix("recovery-") == true
+                    }
+                    if !hasPrimary {
+                        self.enqueue(request: request, delay: 0, description: "primary")
+                    }
+                    if !hasRecoverySlots {
+                        for slot in 1...self.recoverySlotCount {
+                            self.enqueue(
+                                request: request,
+                                delay: TimeInterval(slot) * self.recoverySlotSpacing,
+                                description: String(format: "recovery-%03d", slot)
+                            )
+                        }
                     }
                 }
             }
@@ -64,23 +81,41 @@ final class BackgroundLeaseManager: NSObject, URLSessionDownloadDelegate {
         }
     }
 
-    private func schedule(after delay: TimeInterval) {
+    private func makeRequest() -> URLRequest? {
+        guard let token = KeychainStore.read("agent-token"),
+              let deviceID = KeychainStore.read("device-id"),
+              token.count >= 40,
+              deviceID.count >= 8 else {
+            return nil
+        }
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 8 * 24 * 60 * 60
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(deviceID, forHTTPHeaderField: "X-Jarvis-Device-ID")
+        request.setValue("ios-background-stream-2", forHTTPHeaderField: "X-Jarvis-Agent-Version")
+        request.setValue(
+            UserDefaults.standard.string(forKey: "jarvis-network") ?? "Unknown",
+            forHTTPHeaderField: "X-Jarvis-Network"
+        )
+        request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+        return request
+    }
+
+    private func enqueue(request: URLRequest, delay: TimeInterval, description: String) {
+        let task = session.downloadTask(with: request)
+        task.taskDescription = description
+        if delay > 0 {
+            task.earliestBeginDate = Date(timeIntervalSinceNow: delay)
+        }
+        task.resume()
+    }
+
+    private func schedulePrimary(after delay: TimeInterval) {
         worker.asyncAfter(deadline: .now() + delay) {
-            guard let token = KeychainStore.read("agent-token"),
-                  let deviceID = KeychainStore.read("device-id"),
-                  token.count >= 40,
-                  deviceID.count >= 8 else {
-                return
-            }
-            var request = URLRequest(url: self.endpoint)
-            request.httpMethod = "GET"
-            request.timeoutInterval = 8 * 24 * 60 * 60
-            request.cachePolicy = .reloadIgnoringLocalCacheData
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            request.setValue(deviceID, forHTTPHeaderField: "X-Jarvis-Device-ID")
-            request.setValue("ios-background-stream-1", forHTTPHeaderField: "X-Jarvis-Agent-Version")
-            request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
-            self.session.downloadTask(with: request).resume()
+            guard let request = self.makeRequest() else { return }
+            self.enqueue(request: request, delay: 0, description: "primary")
         }
     }
 
@@ -104,7 +139,10 @@ final class BackgroundLeaseManager: NSObject, URLSessionDownloadDelegate {
     ) {
         worker.async {
             let succeeded = error == nil && self.successfulTasks.remove(task.taskIdentifier) != nil
-            self.schedule(after: succeeded ? 0.5 : 5.0)
+            if task.taskDescription?.hasPrefix("recovery-") == true {
+                return
+            }
+            self.schedulePrimary(after: succeeded ? 0.5 : 5.0)
         }
     }
 
