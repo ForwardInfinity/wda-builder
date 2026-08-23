@@ -96,6 +96,11 @@ final class AgentController: ObservableObject {
         worker.async { self.tick() }
     }
 
+    func continuedRecoveryPulse() {
+        BackgroundLeaseManager.shared.start()
+        worker.async { self.tick() }
+    }
+
     func performBackgroundRefresh(completion: @escaping (Bool) -> Void) {
         worker.async {
             self.performRequest { success in
@@ -137,7 +142,7 @@ final class AgentController: ObservableObject {
         if isEnrollment {
             payload["client"] = "jarvis-wda"
         } else {
-            payload["agent_version"] = "ios-standalone-4"
+            payload["agent_version"] = "ios-standalone-5"
             payload["bundle"] = Bundle.main.bundleIdentifier ?? "unknown"
             payload["network"] = UserDefaults.standard.string(forKey: "jarvis-network") ?? "Unknown"
             payload["os"] = UIDevice.current.systemVersion

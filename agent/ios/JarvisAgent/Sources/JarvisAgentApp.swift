@@ -16,6 +16,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             }
             Self.handle(refresh)
         }
+        if #available(iOS 26.0, *) {
+            ContinuedRecoveryManager.shared.registerPendingTask()
+        }
         AgentController.shared.start()
         return true
     }
@@ -69,6 +72,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 struct JarvisAgentApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var agent = AgentController.shared
+    @State private var recoveryRequested = false
 
     var body: some Scene {
         WindowGroup {
@@ -87,12 +91,25 @@ struct JarvisAgentApp: App {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    Text("This prototype sends only authenticated health heartbeats. It does not read the passcode, screen, photos, messages, or location.")
+                    if #available(iOS 26.0, *) {
+                        GroupBox("Always-on recovery") {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Starts a visible 48-hour iOS continued-processing session so Jarvis can reconnect to the VPS after a cellular socket is lost.")
+                                    .font(.footnote)
+                                Button(recoveryRequested ? "Recovery requested" : "Start 48-Hour Recovery") {
+                                    ContinuedRecoveryManager.shared.startFromUserAction()
+                                    recoveryRequested = true
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(recoveryRequested)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+
+                    Text("This prototype sends only authenticated health metadata. It does not read the passcode, screen, photos, messages, or location.")
                         .font(.footnote)
                         .foregroundColor(.secondary)
-
-                    Text("Keep this screen open for the first cellular reconnect test.")
-                        .font(.callout.bold())
 
                     Spacer()
                 }

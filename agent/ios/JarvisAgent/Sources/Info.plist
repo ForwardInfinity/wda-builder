@@ -39,6 +39,7 @@
   <key>BGTaskSchedulerPermittedIdentifiers</key>
   <array>
     <string>com.forwardinfinity.jarvisagent.refresh</string>
+    <string>com.forwardinfinity.jarvisagent.recovery.*</string>
   </array>
 </dict>
 </plist>
