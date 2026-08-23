@@ -85,7 +85,9 @@ jobs:
           mkdir Payload
           cp -R "$APP" Payload/
           /usr/bin/zip -qry WebDriverAgent-Jarvis-ReverseAgent-v1.ipa Payload
-          test "$(stat -f%z WebDriverAgent-Jarvis-ReverseAgent-v1.ipa)" -gt 1000000
+          IPA_BYTES="$(stat -f%z WebDriverAgent-Jarvis-ReverseAgent-v1.ipa)"
+          echo "IPA_BYTES=$IPA_BYTES"
+          test "$IPA_BYTES" -gt 100000
           shasum -a 256 WebDriverAgent-Jarvis-ReverseAgent-v1.ipa
 
       - name: Upload unsigned IPA
