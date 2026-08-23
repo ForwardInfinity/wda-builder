@@ -203,7 +203,7 @@ final class LocalControlBridge {
                 completion(self.failure("session-failed", httpStatus: sessionCode))
                 return
             }
-            self.prepareKeypad { gateCode, passed in
+            self.prepareKeypad(sessionID: sessionID) { gateCode, passed in
                 guard passed else {
                     completion(self.failure("keypad-gate-rejected", httpStatus: gateCode, extra: ["keypad_gate": false]))
                     return
@@ -250,7 +250,7 @@ final class LocalControlBridge {
                 completion(self.failure("session-failed", httpStatus: sessionCode))
                 return
             }
-            self.prepareKeypad { gateCode, passed in
+            self.prepareKeypad(sessionID: sessionID) { gateCode, passed in
                 guard passed else {
                     completion(self.failure("keypad-gate-rejected", httpStatus: gateCode, extra: ["keypad_gate": false]))
                     return
@@ -337,19 +337,42 @@ final class LocalControlBridge {
         clear(10)
     }
 
-    private func prepareKeypad(completion: @escaping (Int, Bool) -> Void) {
+    private func prepareKeypad(
+        sessionID: String,
+        completion: @escaping (Int, Bool) -> Void
+    ) {
         readLockState { lockCode, locked in
             guard lockCode == 200, locked == true else {
                 completion(lockCode, false)
                 return
             }
-            // WDA's unlock helper presses Home twice. With a real passcode it
-            // returns HTTP 500 after its bounded wait, but the keypad side
-            // effect occurs. Source inspection below is the actual gate.
-            self.wdaRequest(method: "POST", path: "/wda/unlock", body: [:]) { _, _ in
-                self.callbackQueue.asyncAfter(deadline: .now() + 0.5) {
-                    self.wdaRequest(method: "GET", path: "/source?format=json", body: nil) { sourceCode, data in
-                        completion(sourceCode, sourceCode == 200 && self.isPasscodeKeypad(data))
+            // /wda/unlock blocks until FBScreenLockTimeout when a passcode is
+            // present. Direct Home events return immediately, keeping the
+            // keypad awake long enough for the semantic source gate.
+            self.sendHID(sessionID: sessionID, page: 0x0C, usage: 0x40, duration: 0.08) { firstCode in
+                guard firstCode == 200 else {
+                    completion(firstCode, false)
+                    return
+                }
+                self.callbackQueue.asyncAfter(deadline: .now() + 0.20) {
+                    self.sendHID(sessionID: sessionID, page: 0x0C, usage: 0x40, duration: 0.08) { secondCode in
+                        guard secondCode == 200 else {
+                            completion(secondCode, false)
+                            return
+                        }
+                        self.callbackQueue.asyncAfter(deadline: .now() + 0.20) {
+                            self.sendHID(sessionID: sessionID, usage: 0x2A, duration: 0.03) { backspaceCode in
+                                guard backspaceCode == 200 else {
+                                    completion(backspaceCode, false)
+                                    return
+                                }
+                                self.callbackQueue.asyncAfter(deadline: .now() + 0.35) {
+                                    self.wdaRequest(method: "GET", path: "/source?format=json", body: nil) { sourceCode, data in
+                                        completion(sourceCode, sourceCode == 200 && self.isPasscodeKeypad(data))
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -388,6 +411,7 @@ final class LocalControlBridge {
 
     private func sendHID(
         sessionID: String,
+        page: Int = 0x07,
         usage: Int,
         duration: Double,
         completion: @escaping (Int) -> Void
@@ -399,7 +423,7 @@ final class LocalControlBridge {
         wdaRequest(
             method: "POST",
             path: "/session/\(sessionID)/wda/performIoHidEvent",
-            body: ["page": 0x07, "usage": usage, "duration": duration]
+            body: ["page": page, "usage": usage, "duration": duration]
         ) { code, _ in
             completion(code)
         }

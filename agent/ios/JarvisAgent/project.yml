@@ -12,8 +12,8 @@ settings:
     CODE_SIGNING_REQUIRED: NO
     CODE_SIGN_IDENTITY: ""
     PRODUCT_BUNDLE_IDENTIFIER: com.forwardinfinity.jarvisagent
-    MARKETING_VERSION: "0.10.0"
-    CURRENT_PROJECT_VERSION: "10"
+    MARKETING_VERSION: "0.11.0"
+    CURRENT_PROJECT_VERSION: "11"
 targets:
   JarvisAgent:
     type: application
