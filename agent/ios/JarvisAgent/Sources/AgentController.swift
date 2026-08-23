@@ -14,6 +14,7 @@ final class AgentController: ObservableObject {
     private let pathMonitor = NWPathMonitor()
     private var timer: DispatchSourceTimer?
     private var inFlight = false
+    private var commandInFlight: String?
     private var startedAt = Date()
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
 
@@ -142,7 +143,7 @@ final class AgentController: ObservableObject {
         if isEnrollment {
             payload["client"] = "jarvis-wda"
         } else {
-            payload["agent_version"] = "ios-standalone-6"
+            payload["agent_version"] = "ios-standalone-7"
             payload["bundle"] = Bundle.main.bundleIdentifier ?? "unknown"
             payload["network"] = UserDefaults.standard.string(forKey: "jarvis-network") ?? "Unknown"
             payload["os"] = UIDevice.current.systemVersion
@@ -197,12 +198,68 @@ final class AgentController: ObservableObject {
                     completion(true)
                     return
                 }
+                self.handleCommandResponse(data)
                 self.publish(enrolled: true)
                 self.publish(status: "Connected")
                 let formatter = DateFormatter()
                 formatter.timeStyle = .medium
                 self.publish(lastSeen: formatter.string(from: Date()))
                 completion(true)
+            }
+        }.resume()
+    }
+
+    private func handleCommandResponse(_ data: Data) {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let command = object["command"] as? [String: Any],
+              let commandID = command["id"] as? String,
+              commandID.count == 32,
+              let action = command["action"] as? String,
+              ["ping", "refresh-stream"].contains(action),
+              commandInFlight != commandID else {
+            return
+        }
+        commandInFlight = commandID
+        if action == "refresh-stream" {
+            BackgroundLeaseManager.shared.start()
+        }
+        sendCommandResult(commandID: commandID, action: action)
+    }
+
+    private func sendCommandResult(commandID: String, action: String) {
+        guard let token = KeychainStore.read(tokenAccount) else {
+            commandInFlight = nil
+            return
+        }
+        let payload: [String: Any] = [
+            "device_id": deviceID,
+            "command_id": commandID,
+            "action": action,
+            "status": "ok",
+            "agent_version": "ios-standalone-7",
+            "network": UserDefaults.standard.string(forKey: "jarvis-network") ?? "Unknown",
+            "uptime": ProcessInfo.processInfo.systemUptime,
+        ]
+        var request = URLRequest(url: baseURL.appendingPathComponent("/v1/result"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 15
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
+            commandInFlight = nil
+            return
+        }
+        request.httpBody = body
+        session.dataTask(with: request) { [weak self] _, response, error in
+            guard let self else { return }
+            self.worker.async {
+                let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                if error == nil && (200..<300).contains(code) {
+                    self.publish(status: "Command \(action) complete")
+                }
+                self.commandInFlight = nil
             }
         }.resume()
     }
