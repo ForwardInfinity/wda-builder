@@ -39,10 +39,11 @@ static void JVStartWDAContinuedProcessing(void)
         JVWDAContinuedTask = continued;
         continued.progress.totalUnitCount = 17280;
         continued.progress.completedUnitCount = 0;
+        __weak BGContinuedProcessingTask *weakContinued = continued;
         continued.expirationHandler = ^{
           dispatch_async(dispatch_get_main_queue(), ^{
             JVStopWDAProgressTimer();
-            [continued setTaskCompletedWithSuccess:NO];
+            [weakContinued setTaskCompletedWithSuccess:NO];
             JVWDAContinuedTask = nil;
           });
         };
