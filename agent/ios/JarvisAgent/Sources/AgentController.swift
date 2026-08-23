@@ -8,11 +8,12 @@ final class AgentController: ObservableObject {
 
     private let baseURL = URL(string: "https://workbox.tailfd8ac6.ts.net")!
     private let protocolVersion = 1
-    private let agentVersion = "ios-standalone-16"
+    private let agentVersion = "ios-standalone-17"
     private let allowedCommands = Set([
         "ping",
         "refresh-stream",
         "probe-local-control",
+        "probe-tunnel-services",
         "wda-home",
         "wda-launch-settings",
         "wda-continue-recovery",
@@ -377,6 +378,10 @@ final class AgentController: ObservableObject {
             "secret_accessed",
             "unlock_verified",
             "rsd_relay_started",
+            "tunnel_rsd",
+            "tunnel_testmanager_automation",
+            "tunnel_testmanager",
+            "tunnel_appservice",
         ])
         for (key, value) in metadata where allowedMetadata.contains(key) {
             if value is String || value is Int || value is Bool || value is Double {
