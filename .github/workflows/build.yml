@@ -1,44 +1,59 @@
-name: Build WDA for iOS 18 (merged xctest)
+name: Build Jarvis WDA reverse agent
 
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: macos-15
+    timeout-minutes: 35
     steps:
-      - name: Checkout WebDriverAgent
+      - name: Checkout Jarvis builder inputs
+        uses: actions/checkout@v4
+        with:
+          path: builder
+
+      - name: Checkout pinned WebDriverAgent
         uses: actions/checkout@v4
         with:
           repository: appium/WebDriverAgent
-          ref: master
+          ref: ee029da84448895c4ad51be0688e7b7df30697de
           submodules: true
+          path: wda
 
-      - name: Setup Xcode 16
+      - name: Setup Xcode 26
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: '26'
+
+      - name: Patch reverse agent
+        run: |
+          set -euo pipefail
+          python3 builder/agent/patch_wda_reverse_agent.py wda \
+            --snippet builder/agent/FBJarvisReverseAgent.inc.m
+          grep -n 'JarvisAgent phase1 started' wda/WebDriverAgentRunner/UITestingUITests.m
+          grep -n 'XCTestCase <FBWebServerDelegate>' wda/WebDriverAgentRunner/UITestingUITests.m
+          ! grep -R -E 'Bearer [A-Za-z0-9_-]{20,}|ntfy-topic|/root/.config/jarvis/passcode' builder/agent
 
       - name: Show versions
         run: |
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
-      - name: Bootstrap
+      - name: Bootstrap WDA
+        working-directory: wda
         run: |
-          if [ -f "./Scripts/bootstrap.sh" ]; then
+          if [ -f ./Scripts/bootstrap.sh ]; then
             bash ./Scripts/bootstrap.sh -d
           fi
 
-      - name: Patch test class (drop FBFailureProofTestCase for iOS 26)
+      - name: Build unsigned arm64 WDA
+        working-directory: wda
         run: |
-          # iOS 26.6: FBFailureProofTestCase private-API overrides deadlock the runner
-          perl -pi -e 's|#import <WebDriverAgentLib/FBFailureProofTestCase.h>|// patched: no FBFailureProofTestCase|' WebDriverAgentRunner/UITestingUITests.m
-          perl -pi -e 's/@interface UITestingUITests : FBFailureProofTestCase <FBWebServerDelegate>/@interface UITestingUITests : XCTestCase <FBWebServerDelegate>/' WebDriverAgentRunner/UITestingUITests.m
-          grep -n "XCTestCase <FBWebServerDelegate>" WebDriverAgentRunner/UITestingUITests.m && echo "PATCH OK" || echo "PATCH FAILED" 
-
-      - name: Build WDA
-        run: |
+          set -euo pipefail
           xcodebuild \
             -project WebDriverAgent.xcodeproj \
             -scheme WebDriverAgentRunner \
@@ -53,30 +68,29 @@ jobs:
             ASSETCATALOG_COMPILER_APPICON_NAME= \
             ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS=NO \
             clean build \
-            CONFIGURATION_BUILD_DIR=$PWD/build
+            CONFIGURATION_BUILD_DIR="$PWD/build"
 
-      - name: Verify build output
+      - name: Verify and package
+        working-directory: wda
         run: |
+          set -euo pipefail
           APP="$PWD/build/WebDriverAgentRunner-Runner.app"
-          ls -la "$APP/"
-          echo "--- PlugIns ---"
-          ls -la "$APP/PlugIns/" 2>/dev/null || echo "(no PlugIns dir)"
-          echo "--- Frameworks ---"
-          ls -la "$APP/Frameworks/" 2>/dev/null || echo "(no Frameworks dir)"
-          file "$APP/WebDriverAgentRunner-Runner" 2>/dev/null
-
-      - name: Package IPA
-        run: |
+          test -x "$APP/WebDriverAgentRunner-Runner"
+          strings "$APP/WebDriverAgentRunner-Runner" | grep -q 'JarvisAgent phase1 started'
+          cat > "$APP/JarvisAgentBuild.json" <<'JSON'
+          {"agent":"reverse-heartbeat","version":1,"wda_commit":"ee029da84448895c4ad51be0688e7b7df30697de"}
+          JSON
+          rm -rf Payload
           mkdir Payload
-          cp -r build/WebDriverAgentRunner-Runner.app Payload/
-          zip -r WebDriverAgent-iOS18.ipa Payload/
-          ls -lh WebDriverAgent-iOS18.ipa
+          cp -R "$APP" Payload/
+          /usr/bin/zip -qry WebDriverAgent-Jarvis-ReverseAgent-v1.ipa Payload
+          test "$(stat -f%z WebDriverAgent-Jarvis-ReverseAgent-v1.ipa)" -gt 1000000
+          shasum -a 256 WebDriverAgent-Jarvis-ReverseAgent-v1.ipa
 
-      - name: Upload
+      - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: WDA-iOS18-v2
-          path: WebDriverAgent-iOS18.ipa
-          retention-days: 30
-
-# force rescan
+          name: Jarvis-WDA-ReverseAgent-v1
+          path: wda/WebDriverAgent-Jarvis-ReverseAgent-v1.ipa
+          retention-days: 14
+          if-no-files-found: error
