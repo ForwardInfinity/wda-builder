@@ -143,17 +143,17 @@ static const NSTimeInterval JVAgentInterval = 5.0;
   NSURLSessionDataTask *task = [self.session dataTaskWithRequest:request
     completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
       dispatch_async(weakSelf.queue, ^{
-        __strong typeof(weakSelf) self = weakSelf;
-        if (self == nil) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (strongSelf == nil) {
           return;
         }
-        self.inFlight = NO;
+        strongSelf.inFlight = NO;
         NSInteger status = [(NSHTTPURLResponse *)response statusCode];
         if (error != nil || status < 200 || status >= 300) {
-          if (self.reportedHealthy) {
+          if (strongSelf.reportedHealthy) {
             NSLog(@"JarvisAgent heartbeat unavailable status=%ld error=%@", (long)status, error.domain ?: @"none");
           }
-          self.reportedHealthy = NO;
+          strongSelf.reportedHealthy = NO;
           return;
         }
         if (token.length == 0) {
@@ -162,14 +162,14 @@ static const NSTimeInterval JVAgentInterval = 5.0;
           if ([issuedToken isKindOfClass:NSString.class] && issuedToken.length >= 40) {
             [NSUserDefaults.standardUserDefaults setObject:issuedToken forKey:JVAgentTokenKey];
             NSLog(@"JarvisAgent enrollment complete");
-            [self tick];
+            [strongSelf tick];
           }
           return;
         }
-        if (!self.reportedHealthy) {
+        if (!strongSelf.reportedHealthy) {
           NSLog(@"JarvisAgent outbound heartbeat healthy");
         }
-        self.reportedHealthy = YES;
+        strongSelf.reportedHealthy = YES;
       });
     }];
   [task resume];
