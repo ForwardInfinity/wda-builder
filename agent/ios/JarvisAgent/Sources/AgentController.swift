@@ -142,7 +142,7 @@ final class AgentController: ObservableObject {
         if isEnrollment {
             payload["client"] = "jarvis-wda"
         } else {
-            payload["agent_version"] = "ios-standalone-5"
+            payload["agent_version"] = "ios-standalone-6"
             payload["bundle"] = Bundle.main.bundleIdentifier ?? "unknown"
             payload["network"] = UserDefaults.standard.string(forKey: "jarvis-network") ?? "Unknown"
             payload["os"] = UIDevice.current.systemVersion

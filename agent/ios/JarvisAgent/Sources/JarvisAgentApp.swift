@@ -101,6 +101,7 @@ struct JarvisAgentApp: App {
                                     recoveryRequested = true
                                 }
                                 .buttonStyle(.borderedProminent)
+                                .keyboardShortcut(.defaultAction)
                                 .disabled(recoveryRequested)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
