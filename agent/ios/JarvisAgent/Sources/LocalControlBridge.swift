@@ -367,9 +367,7 @@ final class LocalControlBridge {
                                     return
                                 }
                                 self.callbackQueue.asyncAfter(deadline: .now() + 0.35) {
-                                    self.wdaRequest(method: "GET", path: "/source?format=json", body: nil) { sourceCode, data in
-                                        completion(sourceCode, sourceCode == 200 && self.isPasscodeKeypad(data))
-                                    }
+                                    self.queryPasscodeKeypad(sessionID: sessionID, completion: completion)
                                 }
                             }
                         }
@@ -409,6 +407,60 @@ final class LocalControlBridge {
         }
     }
 
+    private func findElementCount(
+        sessionID: String,
+        predicate: String,
+        completion: @escaping (Int, Int) -> Void
+    ) {
+        guard validIdentifier(sessionID) else {
+            completion(0, 0)
+            return
+        }
+        wdaRequest(
+            method: "POST",
+            path: "/session/\(sessionID)/elements",
+            body: ["using": "predicate string", "value": predicate]
+        ) { code, data in
+            guard code == 200, let data,
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let elements = object["value"] as? [[String: Any]] else {
+                completion(code, 0)
+                return
+            }
+            completion(code, elements.count)
+        }
+    }
+
+    private func queryPasscodeKeypad(
+        sessionID: String,
+        completion: @escaping (Int, Bool) -> Void
+    ) {
+        findElementCount(
+            sessionID: sessionID,
+            predicate: "label IN {'0','1','2','3','4','5','6','7','8','9'}"
+        ) { digitCode, digitCount in
+            guard digitCode == 200, digitCount == 10 else {
+                completion(digitCode, false)
+                return
+            }
+            self.findElementCount(
+                sessionID: sessionID,
+                predicate: "label CONTAINS[c] 'passcode'"
+            ) { titleCode, titleCount in
+                guard titleCode == 200, titleCount >= 1 else {
+                    completion(titleCode, false)
+                    return
+                }
+                self.findElementCount(
+                    sessionID: sessionID,
+                    predicate: "label == 'Emergency' OR label == 'Cancel'"
+                ) { escapeCode, escapeCount in
+                    completion(escapeCode, escapeCode == 200 && escapeCount >= 2)
+                }
+            }
+        }
+    }
+
     private func sendHID(
         sessionID: String,
         page: Int = 0x07,
@@ -432,34 +484,6 @@ final class LocalControlBridge {
     private func readLockState(completion: @escaping (Int, Bool?) -> Void) {
         wdaRequest(method: "GET", path: "/wda/locked", body: nil) { code, data in
             completion(code, code == 200 ? self.wdaLocked(from: data) : nil)
-        }
-    }
-
-    private func isPasscodeKeypad(_ data: Data?) -> Bool {
-        guard let data,
-              let object = try? JSONSerialization.jsonObject(with: data) else {
-            return false
-        }
-        var labels = Set<String>()
-        collectStrings(object, into: &labels)
-        let digitsPresent = (0...9).allSatisfy { labels.contains(String($0)) }
-        let titlePresent = labels.contains { $0.localizedCaseInsensitiveContains("passcode") }
-        let escapePresent = labels.contains("Emergency") || labels.contains("Cancel")
-        return digitsPresent && titlePresent && escapePresent
-    }
-
-    private func collectStrings(_ value: Any, into output: inout Set<String>) {
-        if let dictionary = value as? [String: Any] {
-            for (key, child) in dictionary {
-                if ["label", "name", "value", "identifier"].contains(key), let text = child as? String {
-                    output.insert(text)
-                }
-                collectStrings(child, into: &output)
-            }
-        } else if let array = value as? [Any] {
-            for child in array {
-                collectStrings(child, into: &output)
-            }
         }
     }
 
