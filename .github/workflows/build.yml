@@ -1,4 +1,4 @@
-name: Build experimental on-device RSD probe
+name: Build integrated Jarvis iOS agent v20
 
 on:
   workflow_dispatch:
@@ -24,58 +24,102 @@ jobs:
           set -euo pipefail
           rustup toolchain install 1.98.0 --profile minimal
           rustup default 1.98.0
-          rustup component add clippy
           rustup target add aarch64-apple-ios
-          if ! command -v xcodegen >/dev/null; then
-            brew install xcodegen
-          fi
+          if ! command -v xcodegen >/dev/null; then brew install xcodegen; fi
           xcodebuild -version
           rustc --version
-          cargo --version
           xcodegen --version
 
-      - name: Static fail-closed policy tests
+      - name: Static fail-closed policy
         env:
-          JARVIS_SKIP_V19_BASELINE: "1"
+          JARVIS_SKIP_V19_BASELINE: '1'
         run: |
           set -euo pipefail
+          python3 agent/test_v20_static_policy.py
           python3 experiments/ondevice-rsd-probe/tests/test_static_policy.py
           ! grep -R -E 'Bearer [A-Za-z0-9_-]{20,}|ntfy-topic|jarvis/passcode' \
+            agent/ios/JarvisAgentV20/Sources \
             experiments/ondevice-rsd-probe/rust/src \
-            experiments/ondevice-rsd-probe/ios/Sources \
             experiments/ondevice-rsd-probe/include
 
-      - name: RustSec dependency audit
+      - name: Build pinned fixed-controller library
         run: |
           set -euo pipefail
           experiments/ondevice-rsd-probe/scripts/prepare_vendor.sh
-          cargo install cargo-audit --version 0.22.2 --locked
-          (cd experiments/ondevice-rsd-probe/rust && cargo audit --deny warnings)
+          cargo build \
+            --manifest-path experiments/ondevice-rsd-probe/rust/Cargo.toml \
+            --locked --release --target aarch64-apple-ios
 
-      - name: Build and package unsigned probe
+      - name: Build unsigned integrated agent
+        working-directory: agent/ios/JarvisAgentV20
         run: |
           set -euo pipefail
-          experiments/ondevice-rsd-probe/scripts/build_macos.sh
+          xcodegen generate
+          xcodebuild \
+            -project JarvisAgentV20.xcodeproj \
+            -scheme JarvisAgentV20 \
+            -sdk iphoneos \
+            -configuration Release \
+            -destination generic/platform=iOS \
+            CODE_SIGN_IDENTITY='' \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            ASSETCATALOG_COMPILER_APPICON_NAME= \
+            clean build \
+            CONFIGURATION_BUILD_DIR="$PWD/build"
 
-      - name: Record dependency and artifact manifest
+      - name: Verify and package
+        working-directory: agent/ios/JarvisAgentV20
         run: |
           set -euo pipefail
-          ROOT=experiments/ondevice-rsd-probe
-          {
-            printf 'idevice_commit='; git -C "$ROOT/vendor/idevice" rev-parse HEAD
-            printf 'idevice_tree='; git -C "$ROOT/vendor/idevice" rev-parse 'HEAD^{tree}'
-            printf 'cargo_lock_sha256='; shasum -a 256 "$ROOT/rust/Cargo.lock" | awk '{print $1}'
-            printf 'ipa_sha256='; shasum -a 256 "$ROOT/ios/JarvisRSDProbe-unsigned-v1.ipa" | awk '{print $1}'
-          } > "$ROOT/ios/JarvisRSDProbe-build-manifest.txt"
-          cat "$ROOT/ios/JarvisRSDProbe-build-manifest.txt"
+          APP="$PWD/build/JarvisAgent.app"
+          BIN="$APP/JarvisAgent"
+          test -x "$BIN"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist" | grep -qx com.forwardinfinity.jarvisagent
+          /usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$APP/Info.plist" | grep -qx 26.0
+          /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes:0' "$APP/Info.plist" | grep -qx fetch
+          /usr/libexec/PlistBuddy -c 'Print :BGTaskSchedulerPermittedIdentifiers:1' "$APP/Info.plist" | grep -qx 'com.forwardinfinity.jarvisagent.recovery.*'
+          strings "$BIN" > /tmp/jarvis-agent-v20.strings
+          for required in \
+            'workbox.tailfd8ac6.ts.net' \
+            'ios-standalone-20-integrated-controller' \
+            'Jarvis cellular recovery' \
+            'INTEGRATED JARVIS CONTROLLER + WDA PASS' \
+            '10.7.0.1' \
+            'com.ios-use.wda.00008101-00064d1a3a68001e' \
+            '_IDE_authorizeTestSessionWithProcessID:' \
+            'http://127.0.0.1:8100/status' \
+            'secure-unlock'; do
+            grep -Fq "$required" /tmp/jarvis-agent-v20.strings || { echo "required marker absent: $required" >&2; exit 3; }
+          done
+          for forbidden in \
+            'refresh-stream' \
+            'probe-tunnel-services' \
+            'probe-private-hid' \
+            'start-rsd-relay' \
+            '/v1/rsd-relay/' \
+            'performIoHidEvent'; do
+            ! grep -Fxq "$forbidden" /tmp/jarvis-agent-v20.strings || { echo "forbidden marker present: $forbidden" >&2; exit 3; }
+          done
+          cat > "$APP/JarvisAgentBuild.json" <<'JSON'
+          {"agent":"standalone-integrated-control","version":20,"controller":"fixed-ondevice-xctest-wda","transport":"10.7.0.1:49152"}
+          JSON
+          rm -rf Payload
+          mkdir Payload
+          cp -R "$APP" Payload/
+          /usr/bin/zip -qry JarvisAgent-unsigned-v20.ipa Payload
+          chmod 600 JarvisAgent-unsigned-v20.ipa
+          test "$(stat -f%z JarvisAgent-unsigned-v20.ipa)" -gt 500000
+          shasum -a 256 JarvisAgent-unsigned-v20.ipa | tee JarvisAgent-v20.sha256
 
-      - name: Upload unsigned experimental artifact
+      - name: Upload unsigned integrated agent
         uses: actions/upload-artifact@v4
         with:
-          name: JarvisRSDProbe-unsigned-v1
+          name: JarvisAgent-unsigned-v20
           path: |
-            experiments/ondevice-rsd-probe/ios/JarvisRSDProbe-unsigned-v1.ipa
-            experiments/ondevice-rsd-probe/ios/JarvisRSDProbe-build-manifest.txt
-            experiments/ondevice-rsd-probe/rust/Cargo.lock
+            agent/ios/JarvisAgentV20/JarvisAgent-unsigned-v20.ipa
+            agent/ios/JarvisAgentV20/JarvisAgent-v20.sha256
           retention-days: 7
           if-no-files-found: error
