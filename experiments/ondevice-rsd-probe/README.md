@@ -78,4 +78,4 @@ This is a **warm on-device DTX-transport continuity PASS**. It does not prove fr
 
 This is a **warm fixed XCTestManager proxy-channel continuity PASS**, not an XCTest session or cold-recovery result. See `demo/2026-08-24_gate3-fixed-xctestmanager-proxy-pass.txt`.
 
-No secret-bearing or UI-control action is permitted in this target. Any XCTest control-session initialization is a new capability and requires a separately authorized gate. Main-session initialization, authorization, and runner launch remain later independent boundaries.
+No secret-bearing or UI-control action is permitted in this target. Any XCTest control-session initialization is a new capability and requires a separately authorized gate. Main-session initialization, authorization, and runner launch remain later independent boundaries. The frozen next-step scope is `GATE4-PROPOSAL.md`.
