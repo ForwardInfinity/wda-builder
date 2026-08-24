@@ -1,8 +1,6 @@
-# Jarvis on-device RSD probe (experimental Gate 1)
+# Jarvis on-device RSD probe (experimental Gate 0–2)
 
-This target tests one proposition only:
-
-> With LocalDevVPN already active and a pre-provisioned iOS 26 RPPairing record, can a foreground app pair-verify `10.7.0.1:49152`, establish the userspace tunnel, and complete an RSD handshake?
+This target first tests whether a foreground app can pair-verify the fixed LocalDevVPN peer and complete RSD. Gate 2 then tests only three fixed DTX transport capability handshakes over an already-held adapter.
 
 It is deliberately separate from production Agent v19.
 
@@ -34,7 +32,7 @@ It is deliberately separate from production Agent v19.
 63a341d7f624b5c1f2540e4cecb269151a2caf52
 ```
 
-The local patch removes a private-key debug trace and bounds a CDTunnel response slice. See `DEPENDENCIES.lock`.
+The local patch removes a private-key debug trace, bounds a CDTunnel response slice, separates pair setup from pair verify, and adds the fixed transport-only Gate 2 DTX module. See `DEPENDENCIES.lock`.
 
 ## Offline checks
 
@@ -58,4 +56,14 @@ The unsigned iOS build runs on a macOS/Xcode 26 worker via `build-ios-rsd-probe.
 
 This proves warm on-device RSD continuity only. It does not prove direct testmanager channels, XCTest/WDA, UI control, secure unlock, cold app/VPN recovery, or reboot/DDI recovery. See `demo/2026-08-24_gate0-gate1-ondevice-rsd-probe-build.txt`.
 
-No secret-bearing or UI-control action is permitted in this target. Gate 2 was explicitly authorized and remains bounded to transport capability handshakes until its evidence is reviewed.
+## Gate 2 result — 2026-08-24
+
+1. On Wi-Fi, one fixed dtservicehub transport and two fixed testmanagerd transports each completed the DTX published-capabilities handshake, then all three were closed: PASS.
+2. The same operation passed again after physical cable removal and a warm Wi-Fi-to-Cellular transition. The immediately preceding held-RSD check was `Complete`.
+3. Independent host checks during the second result showed zero Apple USB devices, zero libimobiledevice USB devices, and zero local RSD/WDA holders.
+4. The held adapter was explicitly stopped after evidence collection.
+5. No DTX service channel, XCTest initialization/authorization, process or runner launch, WDA, HID, UI action, or secret access occurred.
+
+This is a **warm on-device DTX-transport continuity PASS**. It does not prove fresh Cellular pairing, cold recovery, an on-device XCTest controller, or UI control. See `demo/2026-08-24_gate2-fixed-dtx-transport-pass.txt`.
+
+No secret-bearing or UI-control action is permitted in this target. Any increase to XCTest session initialization, authorization, or runner launch requires a separately authorized gate.
