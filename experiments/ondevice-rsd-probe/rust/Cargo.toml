@@ -11,6 +11,7 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 idevice = { path = "../vendor/idevice/idevice", default-features = false, features = [
+  "dtx_channel_probe",
   "remote_pairing",
   "ring",
   "rsd",

@@ -36,13 +36,20 @@ class StaticPolicyTests(unittest.TestCase):
         patch = ROOT / "patches/idevice-verify-only-privacy-and-bounds.patch"
         self.assertEqual(
             hashlib.sha256(patch.read_bytes()).hexdigest(),
-            "1ace175b8d25dc12061874fbea6930fdf5006309f6a36eb3aded9edf14201340",
+            "a7800b38ef6f5a5ab01bdac6a04efa5bb42350b5166c5bf442801dd5bddf934d",
         )
         patch_text = patch.read_text()
         self.assertIn("Never emit it via", patch_text)
         self.assertIn("response body truncated", patch_text)
         self.assertIn('remote_pairing_setup = [', patch_text)
         self.assertIn('dep:rand_core_06', patch_text)
+        self.assertIn('dtx_channel_probe = ["dvt_core", "rsd", "tunnel_tcp_stack"]', patch_text)
+        self.assertIn("probe_fixed_testmanager_connections", patch_text)
+        self.assertEqual(patch_text.count('+const TESTMANAGERD: &str = "com.apple.dt.testmanagerd.remote";'), 1)
+        self.assertEqual(patch_text.count('+const DTSERVICEHUB: &str = "com.apple.instruments.dtservicehub";'), 1)
+        self.assertNotIn("+pub mod process_control;", patch_text)
+        self.assertNotIn("+pub mod screenshot;", patch_text)
+        self.assertNotIn("+pub mod xctest;", patch_text)
         self.assertNotIn('+  "dep:rsa",\n+]', patch_text)
 
     def test_ffi_is_narrow_and_fixed_destination(self):
@@ -59,10 +66,11 @@ class StaticPolicyTests(unittest.TestCase):
                 "jarvis_rsd_probe",
                 "jarvis_rsd_hold_start",
                 "jarvis_rsd_hold_check",
+                "jarvis_rsd_hold_dtx_probe",
                 "jarvis_rsd_hold_stop",
             ],
         )
-        self.assertEqual(RUST.count("#[unsafe(no_mangle)]"), 5)
+        self.assertEqual(RUST.count("#[unsafe(no_mangle)]"), 6)
         self.assertIn("HELD_SESSION_MAX_AGE", RUST)
         self.assertIn("Duration::from_secs(10 * 60)", RUST)
 
@@ -75,6 +83,7 @@ class StaticPolicyTests(unittest.TestCase):
                 "jarvis_rsd_probe",
                 "jarvis_rsd_hold_start",
                 "jarvis_rsd_hold_check",
+                "jarvis_rsd_hold_dtx_probe",
                 "jarvis_rsd_hold_stop",
             ],
         )
@@ -107,6 +116,10 @@ class StaticPolicyTests(unittest.TestCase):
         self.assertIn("Run read-only RSD probe", SWIFT)
         self.assertIn("Start held read-only RSD session", SWIFT)
         self.assertIn("This is not cold recoverability", SWIFT)
+        self.assertIn("Probe three fixed DTX transports", SWIFT)
+        self.assertIn("does not open a DTX service channel", SWIFT)
+        self.assertNotIn("launch_runner", RUST + SWIFT + HEADER)
+        self.assertNotIn("authorize_test", RUST + SWIFT + HEADER)
         self.assertEqual(SWIFT.count("bootstrap.mobiledevicepairing"), 2)
         self.assertIn("removeStagedRecord", SWIFT)
 

@@ -32,8 +32,8 @@ rustup component add clippy
 test -s "$LIB"
 # Do not run Apple's `nm` across the Rust archive: prebuilt Rust std objects
 # carry newer LLVM metadata that old Apple symbol readers reject. The Xcode
-# link below is the authoritative ABI check because both C exports are called
-# by Swift and unresolved symbols fail the build.
+# link below is the authoritative ABI check because every C export used by
+# Swift must resolve or the final app link fails.
 
 (
   cd "$IOS"
@@ -73,6 +73,8 @@ strings "$BIN" > /tmp/jarvis-rsd-probe-app.strings
 grep -q '10.7.0.1' /tmp/jarvis-rsd-probe-app.strings
 grep -q 'RSD TRANSPORT PASS' /tmp/jarvis-rsd-probe-app.strings
 grep -q 'com.apple.dt.testmanagerd.remote' /tmp/jarvis-rsd-probe-app.strings
+grep -q 'GATE 2 DTX TRANSPORT PASS' /tmp/jarvis-rsd-probe-app.strings
+grep -q 'does not open a DTX service channel' /tmp/jarvis-rsd-probe-app.strings
 for forbidden in \
   'setupManualPairing' \
   '000000' \
@@ -81,7 +83,12 @@ for forbidden in \
   'secure-unlock' \
   'performIoHidEvent' \
   'localhost:8100' \
-  'start-rsd-relay'; do
+  'start-rsd-relay' \
+  '_IDE_initiateSessionWithIdentifier:capabilities:' \
+  '_IDE_authorizeTestSessionWithProcessID:' \
+  'launchSuspendedProcessWithDevicePath:bundleIdentifier:environment:arguments:options:' \
+  'WebDriverAgent' \
+  'XCTRunner'; do
   if grep -Fxq "$forbidden" /tmp/jarvis-rsd-probe-app.strings; then
     echo "forbidden binary string: $forbidden" >&2
     exit 3
@@ -89,7 +96,7 @@ for forbidden in \
 done
 
 cat > "$APP/JarvisRSDProbeBuild.json" <<'JSON'
-{"experiment":"ondevice-rsd-verify-only","version":1,"endpoint":"10.7.0.1:49152","side_effects":"none"}
+{"experiment":"ondevice-rsd-fixed-dtx-gate","version":2,"endpoint":"10.7.0.1:49152","side_effects":"transport-handshake-only"}
 JSON
 (
   cd "$IOS"

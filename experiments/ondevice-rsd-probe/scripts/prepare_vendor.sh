@@ -9,7 +9,7 @@ PATCH="$ROOT/patches/idevice-verify-only-privacy-and-bounds.patch"
 REPOSITORY='https://github.com/jkcoxson/idevice.git'
 COMMIT='63a341d7f624b5c1f2540e4cecb269151a2caf52'
 TREE='ac08b6133eb024eb1a4f06cf25fdd598a79daa72'
-PATCH_SHA256='1ace175b8d25dc12061874fbea6930fdf5006309f6a36eb3aded9edf14201340'
+PATCH_SHA256='a7800b38ef6f5a5ab01bdac6a04efa5bb42350b5166c5bf442801dd5bddf934d'
 MARKER="$VENDOR/.jarvis-patched"
 
 if [[ "${1:-}" == '--refresh' ]]; then
@@ -40,13 +40,22 @@ git -C "$VENDOR" checkout --quiet --detach "$COMMIT"
 git -C "$VENDOR" apply --unidiff-zero --check "$PATCH"
 git -C "$VENDOR" apply --unidiff-zero "$PATCH"
 git -C "$VENDOR" diff --check
-changed="$(git -C "$VENDOR" diff --name-only | sort)"
+changed="$(
+  {
+    git -C "$VENDOR" diff --name-only
+    git -C "$VENDOR" ls-files --others --exclude-standard
+  } | sort
+)"
 expected="$(printf '%s\n' \
   'idevice/Cargo.toml' \
   'idevice/src/remote_pairing/mod.rs' \
   'idevice/src/remote_pairing/rp_pairing_file.rs' \
   'idevice/src/remote_pairing/tlv.rs' \
   'idevice/src/remote_pairing/tunnel.rs' \
+  'idevice/src/lib.rs' \
+  'idevice/src/services/mod.rs' \
+  'idevice/src/services/dvt/mod.rs' \
+  'idevice/src/services/dvt/fixed_channel_probe.rs' \
   | sort)"
 [[ "$changed" == "$expected" ]] \
   || { printf 'unexpected patched files:\n%s\n' "$changed" >&2; exit 3; }

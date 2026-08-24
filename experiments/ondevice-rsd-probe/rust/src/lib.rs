@@ -18,6 +18,9 @@ use idevice::remote_pairing::{
     RemotePairingClient, RpPairingFile, RpPairingSocket, connect_tls_psk_tunnel_native,
 };
 use idevice::rsd::RsdHandshake;
+use idevice::services::dvt::fixed_channel_probe::{
+    FixedDtxProbeStage, probe_fixed_testmanager_connections,
+};
 use idevice::tcp::adapter::Adapter;
 use idevice::tcp::handle::AdapterHandle;
 use tokio::net::TcpStream;
@@ -47,6 +50,15 @@ pub const STAGE_TUNNEL_PARAMETERS: u32 = 9;
 pub const STAGE_RSD_TCP: u32 = 10;
 pub const STAGE_RSD_HANDSHAKE: u32 = 11;
 pub const STAGE_COMPLETE: u32 = 12;
+pub const STAGE_DTX_RSD_TCP: u32 = 20;
+pub const STAGE_DTX_RSD_HANDSHAKE: u32 = 21;
+pub const STAGE_DTX_DTSERVICEHUB_TCP: u32 = 22;
+pub const STAGE_DTX_DTSERVICEHUB_HANDSHAKE: u32 = 23;
+pub const STAGE_DTX_TESTMANAGER_CTRL_TCP: u32 = 24;
+pub const STAGE_DTX_TESTMANAGER_CTRL_HANDSHAKE: u32 = 25;
+pub const STAGE_DTX_TESTMANAGER_MAIN_TCP: u32 = 26;
+pub const STAGE_DTX_TESTMANAGER_MAIN_HANDSHAKE: u32 = 27;
+pub const STAGE_DTX_COMPLETE: u32 = 28;
 
 const ERROR_INVALID_INPUT: i32 = -7_001;
 const ERROR_PAIRING_MISMATCH: i32 = -7_002;
@@ -68,6 +80,16 @@ pub struct JarvisRsdProbeResult {
     pub protocol_version: u64,
     pub service_mask: u32,
     pub service_count: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct JarvisDtxProbeResult {
+    pub abi_version: u32,
+    pub stage: u32,
+    pub error_code: i32,
+    pub error_subcode: i32,
+    pub channel_mask: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -326,6 +348,56 @@ async fn check_held_session() -> Result<JarvisRsdProbeResult, ProbeFailure> {
     })
 }
 
+fn dtx_stage(stage: FixedDtxProbeStage) -> u32 {
+    match stage {
+        FixedDtxProbeStage::DtServiceHubTcp => STAGE_DTX_DTSERVICEHUB_TCP,
+        FixedDtxProbeStage::DtServiceHubHandshake => STAGE_DTX_DTSERVICEHUB_HANDSHAKE,
+        FixedDtxProbeStage::TestManagerCtrlTcp => STAGE_DTX_TESTMANAGER_CTRL_TCP,
+        FixedDtxProbeStage::TestManagerCtrlHandshake => STAGE_DTX_TESTMANAGER_CTRL_HANDSHAKE,
+        FixedDtxProbeStage::TestManagerMainTcp => STAGE_DTX_TESTMANAGER_MAIN_TCP,
+        FixedDtxProbeStage::TestManagerMainHandshake => STAGE_DTX_TESTMANAGER_MAIN_HANDSHAKE,
+    }
+}
+
+async fn probe_held_dtx_channels() -> Result<JarvisDtxProbeResult, ProbeFailure> {
+    let (mut adapter, rsd_port) = {
+        let held = HELD_SESSION
+            .lock()
+            .map_err(|_| ProbeFailure::fixed(STAGE_DTX_RSD_TCP, ERROR_RUNTIME))?;
+        let session = held
+            .as_ref()
+            .ok_or_else(|| ProbeFailure::fixed(STAGE_DTX_RSD_TCP, ERROR_NO_HELD_SESSION))?;
+        if session.created_at.elapsed() > HELD_SESSION_MAX_AGE {
+            return Err(ProbeFailure::fixed(
+                STAGE_DTX_RSD_TCP,
+                ERROR_HELD_SESSION_EXPIRED,
+            ));
+        }
+        (session.adapter.clone(), session.rsd_port)
+    };
+
+    let rsd_stream = tokio::time::timeout(OPERATION_TIMEOUT, adapter.connect(rsd_port))
+        .await
+        .map_err(|_| ProbeFailure::fixed(STAGE_DTX_RSD_TCP, ERROR_TIMEOUT))?
+        .map_err(|_| ProbeFailure::fixed(STAGE_DTX_RSD_TCP, ERROR_ADAPTER_CONNECT))?;
+    let handshake = bounded(
+        STAGE_DTX_RSD_HANDSHAKE,
+        RsdHandshake::new(rsd_stream),
+    )
+    .await?;
+    let result = probe_fixed_testmanager_connections(&mut adapter, &handshake)
+        .await
+        .map_err(|failure| ProbeFailure::from_idevice(dtx_stage(failure.stage), failure.error))?;
+
+    Ok(JarvisDtxProbeResult {
+        abi_version: ABI_VERSION,
+        stage: STAGE_DTX_COMPLETE,
+        error_code: 0,
+        error_subcode: 0,
+        channel_mask: result.channel_mask,
+    })
+}
+
 /// Validates the bounded RPPairing record format without performing I/O.
 ///
 /// Returns 1 for valid and 0 for invalid. No identifiers or key bytes leave
@@ -553,6 +625,60 @@ pub unsafe extern "C" fn jarvis_rsd_hold_check(
     }
 }
 
+/// Opens exactly one dtservicehub and two testmanagerd DTX transports over the
+/// retained adapter, performs capability handshakes, and drops all three.
+/// It does not open a DTX service channel or initialise an XCTest session.
+///
+/// # Safety
+/// `output` must be a valid writable pointer for the duration of the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jarvis_rsd_hold_dtx_probe(
+    output: *mut JarvisDtxProbeResult,
+) -> i32 {
+    if output.is_null() {
+        return -1;
+    }
+    unsafe {
+        *output = JarvisDtxProbeResult {
+            abi_version: ABI_VERSION,
+            stage: STAGE_DTX_RSD_TCP,
+            error_code: ERROR_NO_HELD_SESSION,
+            ..JarvisDtxProbeResult::default()
+        };
+    }
+    let Ok(_guard) = PROBE_LOCK.try_lock() else {
+        unsafe { (*output).error_code = ERROR_BUSY };
+        return -1;
+    };
+    let runtime = match runtime() {
+        Ok(runtime) => runtime,
+        Err(failure) => {
+            unsafe { (*output).error_code = failure.code };
+            return -1;
+        }
+    };
+
+    match runtime.block_on(probe_held_dtx_channels()) {
+        Ok(result) => {
+            unsafe { *output = result };
+            0
+        }
+        Err(failure) => {
+            if failure.code == ERROR_HELD_SESSION_EXPIRED
+                && let Ok(mut held) = HELD_SESSION.lock()
+            {
+                *held = None;
+            }
+            unsafe {
+                (*output).stage = failure.stage;
+                (*output).error_code = failure.code;
+                (*output).error_subcode = failure.subcode;
+            }
+            -1
+        }
+    }
+}
+
 /// Drops the retained read-only adapter. Returns 1 if one existed, else 0.
 #[unsafe(no_mangle)]
 pub extern "C" fn jarvis_rsd_hold_stop() -> i32 {
@@ -632,7 +758,15 @@ mod tests {
     fn fixed_target_and_service_bits_are_stable() {
         assert_eq!(std::mem::size_of::<JarvisRsdProbeResult>(), 32);
         assert_eq!(std::mem::align_of::<JarvisRsdProbeResult>(), 8);
+        assert_eq!(std::mem::size_of::<JarvisDtxProbeResult>(), 20);
+        assert_eq!(std::mem::align_of::<JarvisDtxProbeResult>(), 4);
         assert_eq!(TARGET.to_string(), "10.7.0.1:49152");
+        assert_eq!(
+            idevice::services::dvt::fixed_channel_probe::FIXED_DTX_DTSERVICEHUB
+                | idevice::services::dvt::fixed_channel_probe::FIXED_DTX_TESTMANAGER_CTRL
+                | idevice::services::dvt::fixed_channel_probe::FIXED_DTX_TESTMANAGER_MAIN,
+            0x07
+        );
         assert_eq!(
             SERVICE_TESTMANAGERD
                 | SERVICE_DTSERVICEHUB

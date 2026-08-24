@@ -16,6 +16,12 @@ enum {
 };
 
 enum {
+    JARVIS_DTX_CHANNEL_DTSERVICEHUB = 1u << 0,
+    JARVIS_DTX_CHANNEL_TESTMANAGER_CTRL = 1u << 1,
+    JARVIS_DTX_CHANNEL_TESTMANAGER_MAIN = 1u << 2,
+};
+
+enum {
     JARVIS_RSD_STAGE_INPUT = 1,
     JARVIS_RSD_STAGE_PAIRING_PARSE = 2,
     JARVIS_RSD_STAGE_TCP_CONNECT = 3,
@@ -28,6 +34,15 @@ enum {
     JARVIS_RSD_STAGE_RSD_TCP = 10,
     JARVIS_RSD_STAGE_RSD_HANDSHAKE = 11,
     JARVIS_RSD_STAGE_COMPLETE = 12,
+    JARVIS_RSD_STAGE_DTX_RSD_TCP = 20,
+    JARVIS_RSD_STAGE_DTX_RSD_HANDSHAKE = 21,
+    JARVIS_RSD_STAGE_DTX_DTSERVICEHUB_TCP = 22,
+    JARVIS_RSD_STAGE_DTX_DTSERVICEHUB_HANDSHAKE = 23,
+    JARVIS_RSD_STAGE_DTX_TESTMANAGER_CTRL_TCP = 24,
+    JARVIS_RSD_STAGE_DTX_TESTMANAGER_CTRL_HANDSHAKE = 25,
+    JARVIS_RSD_STAGE_DTX_TESTMANAGER_MAIN_TCP = 26,
+    JARVIS_RSD_STAGE_DTX_TESTMANAGER_MAIN_HANDSHAKE = 27,
+    JARVIS_RSD_STAGE_DTX_COMPLETE = 28,
 };
 
 typedef struct JarvisRsdProbeResult {
@@ -39,6 +54,14 @@ typedef struct JarvisRsdProbeResult {
     uint32_t service_mask;
     uint32_t service_count;
 } JarvisRsdProbeResult;
+
+typedef struct JarvisDtxProbeResult {
+    uint32_t abi_version;
+    uint32_t stage;
+    int32_t error_code;
+    int32_t error_subcode;
+    uint32_t channel_mask;
+} JarvisDtxProbeResult;
 
 /** Validate a bounded RPPairing record without I/O. Returns 1 or 0. */
 int32_t jarvis_rsd_pairing_record_is_valid(const uint8_t *data, size_t length);
@@ -58,6 +81,9 @@ int32_t jarvis_rsd_hold_start(const uint8_t *data,
 
 /** Re-run only the RSD handshake over the retained adapter. */
 int32_t jarvis_rsd_hold_check(JarvisRsdProbeResult *output);
+
+/** Perform only three fixed DTX capability handshakes, then close them. */
+int32_t jarvis_rsd_hold_dtx_probe(JarvisDtxProbeResult *output);
 
 /** Drop the retained adapter. Returns 1 if one existed, else 0. */
 int32_t jarvis_rsd_hold_stop(void);

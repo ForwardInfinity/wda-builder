@@ -53,6 +53,9 @@ final class ProbeController: ObservableObject {
     @Published private(set) var protocolVersion: UInt64 = 0
     @Published private(set) var advertisedServiceCount: UInt32 = 0
     @Published private(set) var services: [FixedServiceStatus] = makeFixedServices(mask: 0)
+    @Published private(set) var dtxServiceHubReady = false
+    @Published private(set) var dtxTestManagerControlReady = false
+    @Published private(set) var dtxTestManagerMainReady = false
 
     private let worker = DispatchQueue(
         label: "com.forwardinfinity.jarvisrsdprobe.worker",
@@ -258,6 +261,7 @@ final class ProbeController: ObservableObject {
         status = removed ? "Pairing record removed" : "Pairing record removal failed"
         stage = "Local storage"
         clearProbeResult()
+        clearDtxResult()
     }
 
     func startHeldReadOnlySession() {
@@ -271,6 +275,7 @@ final class ProbeController: ObservableObject {
         status = "Opening one bounded held read-only RSD session"
         stage = "Starting"
         clearProbeResult()
+        clearDtxResult()
 
         worker.async { [weak self] in
             guard var bytes = PairingRecordStore.read() else {
@@ -343,6 +348,42 @@ final class ProbeController: ObservableObject {
         }
     }
 
+    func runHeldDtxChannelProbe() {
+        guard !isBusy else { return }
+        guard hasHeldSession else {
+            status = "Gate 2 blocked: no held RSD adapter"
+            stage = "Input"
+            return
+        }
+        isBusy = true
+        status = "Opening three fixed DTX transports; no service channel or session init"
+        stage = "Gate 2 starting"
+        clearDtxResult()
+
+        worker.async { [weak self] in
+            var result = Self.emptyDtxResult()
+            let returnCode = jarvis_rsd_hold_dtx_probe(&result)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isBusy = false
+                self.stage = Self.stageName(result.stage)
+                if returnCode == 0,
+                   result.abi_version == 1,
+                   result.stage == UInt32(JARVIS_RSD_STAGE_DTX_COMPLETE) {
+                    self.dtxServiceHubReady =
+                        result.channel_mask & UInt32(JARVIS_DTX_CHANNEL_DTSERVICEHUB) != 0
+                    self.dtxTestManagerControlReady =
+                        result.channel_mask & UInt32(JARVIS_DTX_CHANNEL_TESTMANAGER_CTRL) != 0
+                    self.dtxTestManagerMainReady =
+                        result.channel_mask & UInt32(JARVIS_DTX_CHANNEL_TESTMANAGER_MAIN) != 0
+                    self.status = "GATE 2 DTX TRANSPORT PASS — three capability handshakes completed and closed"
+                } else {
+                    self.status = "Gate 2 failed closed — code \(result.error_code)/\(result.error_subcode)"
+                }
+            }
+        }
+    }
+
     func stopHeldReadOnlySession() {
         guard !isBusy else { return }
         let existed = jarvis_rsd_hold_stop()
@@ -350,6 +391,7 @@ final class ProbeController: ObservableObject {
         status = existed == 1 ? "Held read-only session stopped" : "No held session was active"
         stage = "Held continuity"
         clearProbeResult()
+        clearDtxResult()
     }
 
     func runReadOnlyProbe() {
@@ -430,6 +472,16 @@ final class ProbeController: ObservableObject {
         )
     }
 
+    private nonisolated static func emptyDtxResult() -> JarvisDtxProbeResult {
+        JarvisDtxProbeResult(
+            abi_version: 0,
+            stage: 0,
+            error_code: 0,
+            error_subcode: 0,
+            channel_mask: 0
+        )
+    }
+
     private func applySuccessfulResult(_ result: JarvisRsdProbeResult) {
         protocolVersion = result.protocol_version
         advertisedServiceCount = result.service_count
@@ -463,6 +515,12 @@ final class ProbeController: ObservableObject {
         services = makeFixedServices(mask: 0)
     }
 
+    private func clearDtxResult() {
+        dtxServiceHubReady = false
+        dtxTestManagerControlReady = false
+        dtxTestManagerMainReady = false
+    }
+
     private static func stageName(_ value: UInt32) -> String {
         switch value {
         case UInt32(JARVIS_RSD_STAGE_INPUT): return "Input"
@@ -477,6 +535,15 @@ final class ProbeController: ObservableObject {
         case UInt32(JARVIS_RSD_STAGE_RSD_TCP): return "Userspace RSD TCP"
         case UInt32(JARVIS_RSD_STAGE_RSD_HANDSHAKE): return "RSD handshake"
         case UInt32(JARVIS_RSD_STAGE_COMPLETE): return "Complete"
+        case UInt32(JARVIS_RSD_STAGE_DTX_RSD_TCP): return "Gate 2 RSD TCP"
+        case UInt32(JARVIS_RSD_STAGE_DTX_RSD_HANDSHAKE): return "Gate 2 RSD handshake"
+        case UInt32(JARVIS_RSD_STAGE_DTX_DTSERVICEHUB_TCP): return "dtservicehub TCP"
+        case UInt32(JARVIS_RSD_STAGE_DTX_DTSERVICEHUB_HANDSHAKE): return "dtservicehub DTX"
+        case UInt32(JARVIS_RSD_STAGE_DTX_TESTMANAGER_CTRL_TCP): return "testmanagerd control TCP"
+        case UInt32(JARVIS_RSD_STAGE_DTX_TESTMANAGER_CTRL_HANDSHAKE): return "testmanagerd control DTX"
+        case UInt32(JARVIS_RSD_STAGE_DTX_TESTMANAGER_MAIN_TCP): return "testmanagerd main TCP"
+        case UInt32(JARVIS_RSD_STAGE_DTX_TESTMANAGER_MAIN_HANDSHAKE): return "testmanagerd main DTX"
+        case UInt32(JARVIS_RSD_STAGE_DTX_COMPLETE): return "Gate 2 complete"
         default: return "None"
         }
     }

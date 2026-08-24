@@ -16,13 +16,15 @@ It is deliberately separate from production Agent v19.
 - Pair-verify only. It never calls upstream `RemotePairingClient::connect` because that method falls back to pair-setup.
 - No PIN callback or pair-setup entry point is exported.
 - It checks only four compile-time service names and returns a bit mask/count.
-- No DVT, XCTest, WDA, HID, process launch, screenshots, or passcode access.
+- Gate 1 has no DTX operation. Gate 2 compiles only the DTX message/transport core needed for three fixed capability handshakes.
+- Gate 2 does not compile process-control, screenshot, XCTest orchestration, installation proxy, runner launch, WDA, HID, or passcode access.
 - Pairing data is bounded to 256 KiB, validated locally, and stored as `AfterFirstUnlockThisDeviceOnly` in a non-synchronizing Keychain item.
 - USB bootstrap can stage only `Documents/bootstrap.mobiledevicepairing`; the app reads it only inside its data-protected sandbox, validates it, moves it to Keychain, overwrites/removes the staged file, and rolls back Keychain if cleanup fails.
 - One fixed `NWConnection` may invoke the official Local Network permission flow; it uses the same endpoint and sends no application data. No Bonjour browser or listener is compiled.
 - Raw pairing identifiers, keys, service ports, UUIDs, and error text are never returned or logged.
 - One foreground operation runs at a time with eight-second network-stage bounds.
 - The optional held-adapter gate retains only the userspace adapter and fixed RSD port, expires after ten minutes, and has an explicit stop. It is labeled warm continuity, not cold recoverability.
+- Gate 2 opens one `com.apple.instruments.dtservicehub` and two `com.apple.dt.testmanagerd.remote` transports, performs fixed DTX capability handshakes, then drops all three before returning. It opens no DTX service channel and performs no session init or authorization.
 
 ## Source pin
 
@@ -56,4 +58,4 @@ The unsigned iOS build runs on a macOS/Xcode 26 worker via `build-ios-rsd-probe.
 
 This proves warm on-device RSD continuity only. It does not prove direct testmanager channels, XCTest/WDA, UI control, secure unlock, cold app/VPN recovery, or reboot/DDI recovery. See `demo/2026-08-24_gate0-gate1-ondevice-rsd-probe-build.txt`.
 
-No secret-bearing or UI-control action is permitted in this target. Gate 2 requires separate explicit authorization.
+No secret-bearing or UI-control action is permitted in this target. Gate 2 was explicitly authorized and remains bounded to transport capability handshakes until its evidence is reviewed.

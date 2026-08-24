@@ -112,6 +112,36 @@ private struct ProbeView: View {
                     .disabled(controller.isBusy || !controller.hasHeldSession)
                 }
 
+                Section("Gate 2 — fixed DTX transports") {
+                    Text("Opens exactly one dtservicehub transport and two testmanagerd transports, performs only their DTX capability handshakes, then closes all three. It does not open a DTX service channel, initialise or authorise XCTest, launch a runner, or access WDA/UI input.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button {
+                        controller.runHeldDtxChannelProbe()
+                    } label: {
+                        Label("Probe three fixed DTX transports", systemImage: "point.3.connected.trianglepath.dotted")
+                    }
+                    .disabled(controller.isBusy || !controller.hasHeldSession)
+                    HStack {
+                        Text("dtservicehub")
+                        Spacer()
+                        Image(systemName: controller.dtxServiceHubReady ? "checkmark.circle.fill" : "minus.circle")
+                            .foregroundStyle(controller.dtxServiceHubReady ? .green : .secondary)
+                    }
+                    HStack {
+                        Text("testmanagerd control")
+                        Spacer()
+                        Image(systemName: controller.dtxTestManagerControlReady ? "checkmark.circle.fill" : "minus.circle")
+                            .foregroundStyle(controller.dtxTestManagerControlReady ? .green : .secondary)
+                    }
+                    HStack {
+                        Text("testmanagerd main")
+                        Spacer()
+                        Image(systemName: controller.dtxTestManagerMainReady ? "checkmark.circle.fill" : "minus.circle")
+                            .foregroundStyle(controller.dtxTestManagerMainReady ? .green : .secondary)
+                    }
+                }
+
                 Section("Sanitized result") {
                     LabeledContent("Status", value: controller.status)
                     LabeledContent("Stage", value: controller.stage)

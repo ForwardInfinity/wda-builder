@@ -1,25 +1,45 @@
 diff --git a/idevice/Cargo.toml b/idevice/Cargo.toml
-index 054c9a8..a378179 100644
+index 054c9a8..9414ed4 100644
 --- a/idevice/Cargo.toml
 +++ b/idevice/Cargo.toml
 @@ -62,0 +63 @@ idevice-srp = { version = "0.6", optional = true }
 +rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"], optional = true }
-@@ -220,2 +221 @@ remote_pairing = [
+@@ -146 +147,5 @@ diagnostics_relay = []
+-dvt = ["dep:ns-keyed-archive", "tokio/sync", "tokio/rt", "tokio/macros"]
++dvt_core = ["dep:ns-keyed-archive", "tokio/sync", "tokio/rt", "tokio/macros"]
++dvt = ["dvt_core"]
++# Fixed DTX transport handshakes only: no process control, screenshots,
++# installation proxy, runner launch, XCTest session init, or WDA client.
++dtx_channel_probe = ["dvt_core", "rsd", "tunnel_tcp_stack"]
+@@ -220,2 +225 @@ remote_pairing = [
 -  "dep:idevice-srp",
 -  "dep:siphasher",
 +  "dep:rand_core_06",
-@@ -227,0 +228,6 @@ remote_pairing = [
+@@ -227,0 +232,6 @@ remote_pairing = [
 +]
 +# Initial pair-setup is intentionally separable from pair-verify so narrow
 +# consumers do not compile SRP/RSA setup code or expose a PIN path.
 +remote_pairing_setup = [
 +  "remote_pairing",
 +  "dep:idevice-srp",
-@@ -228,0 +235 @@ remote_pairing = [
+@@ -228,0 +239 @@ remote_pairing = [
 +  "dep:siphasher",
-@@ -294 +301 @@ full = [
+@@ -294 +305 @@ full = [
 -  "remote_pairing",
 +  "remote_pairing_setup",
+diff --git a/idevice/src/lib.rs b/idevice/src/lib.rs
+index 03a3a6b..d89bc03 100644
+--- a/idevice/src/lib.rs
++++ b/idevice/src/lib.rs
+@@ -871 +871 @@ pub enum IdeviceError {
+-    #[cfg(feature = "dvt")]
++    #[cfg(any(feature = "dvt", feature = "dtx_channel_probe"))]
+@@ -1044 +1044 @@ impl IdeviceError {
+-            #[cfg(feature = "dvt")]
++            #[cfg(any(feature = "dvt", feature = "dtx_channel_probe"))]
+@@ -1088 +1088 @@ impl IdeviceError {
+-            #[cfg(feature = "dvt")]
++            #[cfg(any(feature = "dvt", feature = "dtx_channel_probe"))]
 diff --git a/idevice/src/remote_pairing/mod.rs b/idevice/src/remote_pairing/mod.rs
 index cfa8ad2..abc6582 100644
 --- a/idevice/src/remote_pairing/mod.rs
@@ -118,3 +138,195 @@ index b66be37..27e17f9 100644
 +        ));
 +    }
 +    let response_body = &response_data[body_start..body_end];
+diff --git a/idevice/src/services/dvt/fixed_channel_probe.rs b/idevice/src/services/dvt/fixed_channel_probe.rs
+new file mode 100644
+index 0000000..71539d2
+--- /dev/null
++++ b/idevice/src/services/dvt/fixed_channel_probe.rs
+@@ -0,0 +1,150 @@
++//! Fixed, transport-only DTX probe used by the Jarvis Gate 2 experiment.
++//!
++//! This module deliberately stops after three DTX capability handshakes. It
++//! does not open a service channel, initialise an XCTest session, authorise a
++//! runner, launch a process, or retain any DTX client after returning.
++
++use std::time::Duration;
++
++use plist::{Dictionary, Value};
++
++use crate::{IdeviceError, ReadWrite};
++use crate::services::dvt::remote_server::RemoteServerClient;
++use crate::services::rsd::RsdHandshake;
++use crate::tcp::handle::AdapterHandle;
++
++const DTSERVICEHUB: &str = "com.apple.instruments.dtservicehub";
++const TESTMANAGERD: &str = "com.apple.dt.testmanagerd.remote";
++const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(8);
++
++pub const FIXED_DTX_DTSERVICEHUB: u32 = 1 << 0;
++pub const FIXED_DTX_TESTMANAGER_CTRL: u32 = 1 << 1;
++pub const FIXED_DTX_TESTMANAGER_MAIN: u32 = 1 << 2;
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++#[repr(u32)]
++pub enum FixedDtxProbeStage {
++    DtServiceHubTcp = 1,
++    DtServiceHubHandshake = 2,
++    TestManagerCtrlTcp = 3,
++    TestManagerCtrlHandshake = 4,
++    TestManagerMainTcp = 5,
++    TestManagerMainHandshake = 6,
++}
++
++#[derive(Debug)]
++pub struct FixedDtxProbeFailure {
++    pub stage: FixedDtxProbeStage,
++    pub error: IdeviceError,
++}
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub struct FixedDtxProbeResult {
++    pub channel_mask: u32,
++}
++
++fn capabilities(include_process_control_callback: bool) -> Dictionary {
++    let mut capabilities = Dictionary::new();
++    capabilities.insert(
++        "com.apple.private.DTXBlockCompression".into(),
++        Value::Integer(0i64.into()),
++    );
++    capabilities.insert(
++        "com.apple.private.DTXConnection".into(),
++        Value::Integer(1i64.into()),
++    );
++    if include_process_control_callback {
++        capabilities.insert(
++            "com.apple.instruments.client.processcontrol.capability.terminationCallback".into(),
++            Value::Integer(1i64.into()),
++        );
++    }
++    capabilities
++}
++
++#[allow(clippy::too_many_arguments)]
++async fn open_fixed_connection(
++    handle: &mut AdapterHandle,
++    handshake: &RsdHandshake,
++    service_name: &'static str,
++    label: &'static str,
++    include_process_control_callback: bool,
++    tcp_stage: FixedDtxProbeStage,
++    handshake_stage: FixedDtxProbeStage,
++) -> Result<RemoteServerClient<Box<dyn ReadWrite>>, FixedDtxProbeFailure> {
++    let service = handshake.services.get(service_name).ok_or_else(|| {
++        FixedDtxProbeFailure {
++            stage: tcp_stage,
++            error: IdeviceError::ServiceNotFound,
++        }
++    })?;
++    let stream = crate::time::timeout(HANDSHAKE_TIMEOUT, handle.connect(service.port))
++        .await
++        .map_err(|_| FixedDtxProbeFailure {
++            stage: tcp_stage,
++            error: IdeviceError::Timeout,
++        })?
++        .map_err(|error| FixedDtxProbeFailure {
++            stage: tcp_stage,
++            error: error.into(),
++        })?;
++    let mut client = RemoteServerClient::with_label(stream, label);
++    client
++        .perform_handshake(
++            Some(capabilities(include_process_control_callback)),
++            HANDSHAKE_TIMEOUT,
++        )
++        .await
++        .map_err(|error| FixedDtxProbeFailure {
++            stage: handshake_stage,
++            error,
++        })?;
++    Ok(client)
++}
++
++/// Opens exactly one dtservicehub DTX transport and two testmanagerd DTX
++/// transports, performs only their fixed capability handshakes, then drops all
++/// three clients before returning.
++pub async fn probe_fixed_testmanager_connections(
++    handle: &mut AdapterHandle,
++    handshake: &RsdHandshake,
++) -> Result<FixedDtxProbeResult, FixedDtxProbeFailure> {
++    let dtservicehub = open_fixed_connection(
++        handle,
++        handshake,
++        DTSERVICEHUB,
++        "jarvis-gate2-dtservicehub",
++        true,
++        FixedDtxProbeStage::DtServiceHubTcp,
++        FixedDtxProbeStage::DtServiceHubHandshake,
++    )
++    .await?;
++    let control = open_fixed_connection(
++        handle,
++        handshake,
++        TESTMANAGERD,
++        "jarvis-gate2-testmanager-ctrl",
++        false,
++        FixedDtxProbeStage::TestManagerCtrlTcp,
++        FixedDtxProbeStage::TestManagerCtrlHandshake,
++    )
++    .await?;
++    let main = open_fixed_connection(
++        handle,
++        handshake,
++        TESTMANAGERD,
++        "jarvis-gate2-testmanager-main",
++        false,
++        FixedDtxProbeStage::TestManagerMainTcp,
++        FixedDtxProbeStage::TestManagerMainHandshake,
++    )
++    .await?;
++
++    // Explicitly close all three transports before crossing the public API.
++    drop((main, control, dtservicehub));
++    Ok(FixedDtxProbeResult {
++        channel_mask: FIXED_DTX_DTSERVICEHUB
++            | FIXED_DTX_TESTMANAGER_CTRL
++            | FIXED_DTX_TESTMANAGER_MAIN,
++    })
++}
+diff --git a/idevice/src/services/dvt/mod.rs b/idevice/src/services/dvt/mod.rs
+index f364c53..abd8ba5 100644
+--- a/idevice/src/services/dvt/mod.rs
++++ b/idevice/src/services/dvt/mod.rs
+@@ -2,0 +3,6 @@
++#![cfg_attr(
++    all(feature = "dtx_channel_probe", not(feature = "dvt")),
++    allow(dead_code)
++)]
++
++#[cfg(feature = "dvt")]
+@@ -3,0 +10 @@ use crate::provider::IdeviceProvider;
++#[cfg(feature = "dvt")]
+@@ -4,0 +12 @@ use crate::services::lockdown::LockdownClient;
++#[cfg(feature = "dvt")]
+@@ -20,0 +29,2 @@ pub mod errors;
++#[cfg(feature = "dtx_channel_probe")]
++pub mod fixed_channel_probe;
+@@ -27,0 +38 @@ pub mod network_monitor;
++#[cfg(feature = "dvt")]
+@@ -28,0 +40 @@ pub mod notifications;
++#[cfg(feature = "dvt")]
+@@ -30,0 +43 @@ pub mod remote_server;
++#[cfg(feature = "dvt")]
+@@ -37 +50 @@ pub mod xctest;
+-#[cfg(feature = "rsd")]
++#[cfg(all(feature = "dvt", feature = "rsd"))]
+@@ -54,0 +68 @@ impl crate::RsdService for remote_server::RemoteServerClient<Box<dyn ReadWrite>>
++#[cfg(feature = "dvt")]
+diff --git a/idevice/src/services/mod.rs b/idevice/src/services/mod.rs
+index 2c267c3..09f400c 100644
+--- a/idevice/src/services/mod.rs
++++ b/idevice/src/services/mod.rs
+@@ -19 +19 @@ pub mod diagnostics_relay;
+-#[cfg(feature = "dvt")]
++#[cfg(any(feature = "dvt", feature = "dtx_channel_probe"))]
