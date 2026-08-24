@@ -8,17 +8,49 @@ struct FixedServiceStatus: Identifiable {
     let available: Bool
 }
 
+private let maximumPairingRecordBytes = 256 * 1024
+
+private func validatePairingRecord(_ data: Data) -> Bool {
+    data.withUnsafeBytes { rawBuffer in
+        let base = rawBuffer.bindMemory(to: UInt8.self).baseAddress
+        return jarvis_rsd_pairing_record_is_valid(base, rawBuffer.count) == 1
+    }
+}
+
+private func makeFixedServices(mask: UInt32) -> [FixedServiceStatus] {
+    [
+        FixedServiceStatus(
+            id: "testmanagerd",
+            name: "testmanagerd",
+            available: mask & UInt32(JARVIS_RSD_SERVICE_TESTMANAGERD) != 0
+        ),
+        FixedServiceStatus(
+            id: "dtservicehub",
+            name: "dtservicehub",
+            available: mask & UInt32(JARVIS_RSD_SERVICE_DTSERVICEHUB) != 0
+        ),
+        FixedServiceStatus(
+            id: "appservice",
+            name: "AppService",
+            available: mask & UInt32(JARVIS_RSD_SERVICE_APP_SERVICE) != 0
+        ),
+        FixedServiceStatus(
+            id: "installation-proxy",
+            name: "installation proxy",
+            available: mask & UInt32(JARVIS_RSD_SERVICE_INSTALLATION_PROXY) != 0
+        ),
+    ]
+}
+
 @MainActor
 final class ProbeController: ObservableObject {
-    static let maximumPairingRecordBytes = 256 * 1024
-
     @Published private(set) var hasPairingRecord = PairingRecordStore.isPresent
     @Published private(set) var isBusy = false
     @Published private(set) var status = "Idle — no network operation has run"
     @Published private(set) var stage = "None"
     @Published private(set) var protocolVersion: UInt64 = 0
     @Published private(set) var advertisedServiceCount: UInt32 = 0
-    @Published private(set) var services: [FixedServiceStatus] = Self.makeServices(mask: 0)
+    @Published private(set) var services: [FixedServiceStatus] = makeFixedServices(mask: 0)
 
     private let worker = DispatchQueue(
         label: "com.forwardinfinity.jarvisrsdprobe.worker",
@@ -46,13 +78,13 @@ final class ProbeController: ObservableObject {
                 guard values.isRegularFile == true,
                       let fileSize = values.fileSize,
                       fileSize > 0,
-                      fileSize <= Self.maximumPairingRecordBytes else {
+                      fileSize <= maximumPairingRecordBytes else {
                     throw ImportError.invalidBounds
                 }
                 bytes = try Data(contentsOf: url, options: [])
                 guard !bytes.isEmpty,
-                      bytes.count <= Self.maximumPairingRecordBytes,
-                      Self.validate(bytes) else {
+                      bytes.count <= maximumPairingRecordBytes,
+                      validatePairingRecord(bytes) else {
                     throw ImportError.invalidFormat
                 }
                 guard PairingRecordStore.write(bytes) else {
@@ -138,7 +170,7 @@ final class ProbeController: ObservableObject {
                    result.stage == UInt32(JARVIS_RSD_STAGE_COMPLETE) {
                     self.protocolVersion = result.protocol_version
                     self.advertisedServiceCount = result.service_count
-                    self.services = Self.makeServices(mask: result.service_mask)
+                    self.services = makeFixedServices(mask: result.service_mask)
                     self.status = "RSD TRANSPORT PASS — read-only handshake completed"
                 } else {
                     self.status = "Probe failed closed — code \(result.error_code)/\(result.error_subcode)"
@@ -156,39 +188,7 @@ final class ProbeController: ObservableObject {
     private func clearProbeResult() {
         protocolVersion = 0
         advertisedServiceCount = 0
-        services = Self.makeServices(mask: 0)
-    }
-
-    private static func validate(_ data: Data) -> Bool {
-        data.withUnsafeBytes { rawBuffer in
-            let base = rawBuffer.bindMemory(to: UInt8.self).baseAddress
-            return jarvis_rsd_pairing_record_is_valid(base, rawBuffer.count) == 1
-        }
-    }
-
-    private static func makeServices(mask: UInt32) -> [FixedServiceStatus] {
-        [
-            FixedServiceStatus(
-                id: "testmanagerd",
-                name: "testmanagerd",
-                available: mask & UInt32(JARVIS_RSD_SERVICE_TESTMANAGERD) != 0
-            ),
-            FixedServiceStatus(
-                id: "dtservicehub",
-                name: "dtservicehub",
-                available: mask & UInt32(JARVIS_RSD_SERVICE_DTSERVICEHUB) != 0
-            ),
-            FixedServiceStatus(
-                id: "appservice",
-                name: "AppService",
-                available: mask & UInt32(JARVIS_RSD_SERVICE_APP_SERVICE) != 0
-            ),
-            FixedServiceStatus(
-                id: "installation-proxy",
-                name: "installation proxy",
-                available: mask & UInt32(JARVIS_RSD_SERVICE_INSTALLATION_PROXY) != 0
-            ),
-        ]
+        services = makeFixedServices(mask: 0)
     }
 
     private static func stageName(_ value: UInt32) -> String {
