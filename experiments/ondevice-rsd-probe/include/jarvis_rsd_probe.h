@@ -22,6 +22,11 @@ enum {
 };
 
 enum {
+    JARVIS_XCTESTMANAGER_PROXY_CONTROL = 1u << 0,
+    JARVIS_XCTESTMANAGER_PROXY_MAIN = 1u << 1,
+};
+
+enum {
     JARVIS_RSD_STAGE_INPUT = 1,
     JARVIS_RSD_STAGE_PAIRING_PARSE = 2,
     JARVIS_RSD_STAGE_TCP_CONNECT = 3,
@@ -43,6 +48,15 @@ enum {
     JARVIS_RSD_STAGE_DTX_TESTMANAGER_MAIN_TCP = 26,
     JARVIS_RSD_STAGE_DTX_TESTMANAGER_MAIN_HANDSHAKE = 27,
     JARVIS_RSD_STAGE_DTX_COMPLETE = 28,
+    JARVIS_RSD_STAGE_PROXY_RSD_TCP = 30,
+    JARVIS_RSD_STAGE_PROXY_RSD_HANDSHAKE = 31,
+    JARVIS_RSD_STAGE_PROXY_TESTMANAGER_CTRL_TCP = 32,
+    JARVIS_RSD_STAGE_PROXY_TESTMANAGER_CTRL_HANDSHAKE = 33,
+    JARVIS_RSD_STAGE_PROXY_TESTMANAGER_MAIN_TCP = 34,
+    JARVIS_RSD_STAGE_PROXY_TESTMANAGER_MAIN_HANDSHAKE = 35,
+    JARVIS_RSD_STAGE_PROXY_TESTMANAGER_CTRL_CHANNEL = 36,
+    JARVIS_RSD_STAGE_PROXY_TESTMANAGER_MAIN_CHANNEL = 37,
+    JARVIS_RSD_STAGE_PROXY_COMPLETE = 38,
 };
 
 typedef struct JarvisRsdProbeResult {
@@ -84,6 +98,9 @@ int32_t jarvis_rsd_hold_check(JarvisRsdProbeResult *output);
 
 /** Perform only three fixed DTX capability handshakes, then close them. */
 int32_t jarvis_rsd_hold_dtx_probe(JarvisDtxProbeResult *output);
+
+/** Open and close exactly two fixed XCTestManager proxy channels. */
+int32_t jarvis_rsd_hold_xctestmanager_proxy_probe(JarvisDtxProbeResult *output);
 
 /** Drop the retained adapter. Returns 1 if one existed, else 0. */
 int32_t jarvis_rsd_hold_stop(void);

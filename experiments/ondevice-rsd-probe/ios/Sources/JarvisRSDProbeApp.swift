@@ -28,7 +28,7 @@ private struct ProbeView: View {
                     Label("Read-only foreground experiment", systemImage: "checkmark.shield")
                     Text("Fixed endpoint: LocalDevVPN fake peer 10.7.0.1:49152")
                         .font(.footnote.monospaced())
-                    Text("No pair-setup, PIN callback, relay, DVT, XCTest, WDA, HID, passcode, or VPS command channel is compiled into this app.")
+                    Text("No pair-setup, PIN callback, relay, XCTest session, authorization, runner launch, WDA, HID, passcode, or VPS command channel is compiled into this app.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -139,6 +139,30 @@ private struct ProbeView: View {
                         Spacer()
                         Image(systemName: controller.dtxTestManagerMainReady ? "checkmark.circle.fill" : "minus.circle")
                             .foregroundStyle(controller.dtxTestManagerMainReady ? .green : .secondary)
+                    }
+                }
+
+                Section("Gate 3 — fixed XCTestManager proxy channels") {
+                    Text("Requests exactly one fixed XCTestManager IDE-to-daemon proxy channel on each of two testmanagerd transports, then closes both channels and transports. It sends no XCTest session-init, authorization, process-launch, test-plan, WDA, or UI-input message.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button {
+                        controller.runHeldXCTestManagerProxyProbe()
+                    } label: {
+                        Label("Probe two fixed proxy channels", systemImage: "link.circle")
+                    }
+                    .disabled(controller.isBusy || !controller.hasHeldSession)
+                    HStack {
+                        Text("control proxy channel")
+                        Spacer()
+                        Image(systemName: controller.proxyControlReady ? "checkmark.circle.fill" : "minus.circle")
+                            .foregroundStyle(controller.proxyControlReady ? .green : .secondary)
+                    }
+                    HStack {
+                        Text("main proxy channel")
+                        Spacer()
+                        Image(systemName: controller.proxyMainReady ? "checkmark.circle.fill" : "minus.circle")
+                            .foregroundStyle(controller.proxyMainReady ? .green : .secondary)
                     }
                 }
 

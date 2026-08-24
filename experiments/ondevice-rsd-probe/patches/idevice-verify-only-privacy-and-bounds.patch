@@ -140,32 +140,37 @@ index b66be37..27e17f9 100644
 +    let response_body = &response_data[body_start..body_end];
 diff --git a/idevice/src/services/dvt/fixed_channel_probe.rs b/idevice/src/services/dvt/fixed_channel_probe.rs
 new file mode 100644
-index 0000000..71539d2
+index 0000000..456173f
 --- /dev/null
 +++ b/idevice/src/services/dvt/fixed_channel_probe.rs
-@@ -0,0 +1,150 @@
-+//! Fixed, transport-only DTX probe used by the Jarvis Gate 2 experiment.
+@@ -0,0 +1,277 @@
++//! Fixed DTX probes used by the Jarvis Gate 2–3 experiments.
 +//!
-+//! This module deliberately stops after three DTX capability handshakes. It
-+//! does not open a service channel, initialise an XCTest session, authorise a
-+//! runner, launch a process, or retain any DTX client after returning.
++//! Gate 2 stops after three DTX capability handshakes. Gate 3 requests only
++//! two compile-time XCTestManager proxy channels and immediately closes their
++//! transports. Neither path initialises an XCTest session, authorises a runner,
++//! launches a process, or retains a DTX client after returning.
 +
 +use std::time::Duration;
 +
 +use plist::{Dictionary, Value};
 +
-+use crate::{IdeviceError, ReadWrite};
 +use crate::services::dvt::remote_server::RemoteServerClient;
 +use crate::services::rsd::RsdHandshake;
 +use crate::tcp::handle::AdapterHandle;
++use crate::{IdeviceError, ReadWrite};
 +
 +const DTSERVICEHUB: &str = "com.apple.instruments.dtservicehub";
 +const TESTMANAGERD: &str = "com.apple.dt.testmanagerd.remote";
++const XCTEST_MANAGER_PROXY_IDENTIFIER: &str =
++    "dtxproxy:XCTestManager_IDEInterface:XCTestManager_DaemonConnectionInterface";
 +const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(8);
 +
 +pub const FIXED_DTX_DTSERVICEHUB: u32 = 1 << 0;
 +pub const FIXED_DTX_TESTMANAGER_CTRL: u32 = 1 << 1;
 +pub const FIXED_DTX_TESTMANAGER_MAIN: u32 = 1 << 2;
++pub const FIXED_PROXY_TESTMANAGER_CTRL: u32 = 1 << 0;
++pub const FIXED_PROXY_TESTMANAGER_MAIN: u32 = 1 << 1;
 +
 +#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 +#[repr(u32)]
@@ -186,6 +191,28 @@ index 0000000..71539d2
 +
 +#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 +pub struct FixedDtxProbeResult {
++    pub channel_mask: u32,
++}
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++#[repr(u32)]
++pub enum FixedProxyProbeStage {
++    TestManagerCtrlTcp = 1,
++    TestManagerCtrlHandshake = 2,
++    TestManagerMainTcp = 3,
++    TestManagerMainHandshake = 4,
++    TestManagerCtrlProxyChannel = 5,
++    TestManagerMainProxyChannel = 6,
++}
++
++#[derive(Debug)]
++pub struct FixedProxyProbeFailure {
++    pub stage: FixedProxyProbeStage,
++    pub error: IdeviceError,
++}
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub struct FixedProxyProbeResult {
 +    pub channel_mask: u32,
 +}
 +
@@ -218,12 +245,13 @@ index 0000000..71539d2
 +    tcp_stage: FixedDtxProbeStage,
 +    handshake_stage: FixedDtxProbeStage,
 +) -> Result<RemoteServerClient<Box<dyn ReadWrite>>, FixedDtxProbeFailure> {
-+    let service = handshake.services.get(service_name).ok_or_else(|| {
-+        FixedDtxProbeFailure {
++    let service = handshake
++        .services
++        .get(service_name)
++        .ok_or_else(|| FixedDtxProbeFailure {
 +            stage: tcp_stage,
 +            error: IdeviceError::ServiceNotFound,
-+        }
-+    })?;
++        })?;
 +    let stream = crate::time::timeout(HANDSHAKE_TIMEOUT, handle.connect(service.port))
 +        .await
 +        .map_err(|_| FixedDtxProbeFailure {
@@ -292,6 +320,105 @@ index 0000000..71539d2
 +        channel_mask: FIXED_DTX_DTSERVICEHUB
 +            | FIXED_DTX_TESTMANAGER_CTRL
 +            | FIXED_DTX_TESTMANAGER_MAIN,
++    })
++}
++
++async fn open_fixed_proxy_connection(
++    handle: &mut AdapterHandle,
++    handshake: &RsdHandshake,
++    label: &'static str,
++    tcp_stage: FixedProxyProbeStage,
++    handshake_stage: FixedProxyProbeStage,
++) -> Result<RemoteServerClient<Box<dyn ReadWrite>>, FixedProxyProbeFailure> {
++    let service = handshake
++        .services
++        .get(TESTMANAGERD)
++        .ok_or_else(|| FixedProxyProbeFailure {
++            stage: tcp_stage,
++            error: IdeviceError::ServiceNotFound,
++        })?;
++    let stream = crate::time::timeout(HANDSHAKE_TIMEOUT, handle.connect(service.port))
++        .await
++        .map_err(|_| FixedProxyProbeFailure {
++            stage: tcp_stage,
++            error: IdeviceError::Timeout,
++        })?
++        .map_err(|error| FixedProxyProbeFailure {
++            stage: tcp_stage,
++            error: error.into(),
++        })?;
++    let mut client = RemoteServerClient::with_label(stream, label);
++    client
++        .perform_handshake(Some(capabilities(false)), HANDSHAKE_TIMEOUT)
++        .await
++        .map_err(|error| FixedProxyProbeFailure {
++            stage: handshake_stage,
++            error,
++        })?;
++    Ok(client)
++}
++
++/// Opens exactly two testmanagerd transports and one fixed XCTestManager
++/// proxy channel on each. The channel handles and transports are all dropped
++/// before returning. No XCTest session selector or payload is sent.
++pub async fn probe_fixed_xctestmanager_proxy_channels(
++    handle: &mut AdapterHandle,
++    handshake: &RsdHandshake,
++) -> Result<FixedProxyProbeResult, FixedProxyProbeFailure> {
++    let mut control = open_fixed_proxy_connection(
++        handle,
++        handshake,
++        "jarvis-gate3-testmanager-ctrl",
++        FixedProxyProbeStage::TestManagerCtrlTcp,
++        FixedProxyProbeStage::TestManagerCtrlHandshake,
++    )
++    .await?;
++    let mut main = open_fixed_proxy_connection(
++        handle,
++        handshake,
++        "jarvis-gate3-testmanager-main",
++        FixedProxyProbeStage::TestManagerMainTcp,
++        FixedProxyProbeStage::TestManagerMainHandshake,
++    )
++    .await?;
++
++    {
++        let channel = crate::time::timeout(
++            HANDSHAKE_TIMEOUT,
++            control.make_channel(XCTEST_MANAGER_PROXY_IDENTIFIER),
++        )
++        .await
++        .map_err(|_| FixedProxyProbeFailure {
++            stage: FixedProxyProbeStage::TestManagerCtrlProxyChannel,
++            error: IdeviceError::Timeout,
++        })?
++        .map_err(|error| FixedProxyProbeFailure {
++            stage: FixedProxyProbeStage::TestManagerCtrlProxyChannel,
++            error,
++        })?;
++        drop(channel);
++    }
++    {
++        let channel = crate::time::timeout(
++            HANDSHAKE_TIMEOUT,
++            main.make_channel(XCTEST_MANAGER_PROXY_IDENTIFIER),
++        )
++        .await
++        .map_err(|_| FixedProxyProbeFailure {
++            stage: FixedProxyProbeStage::TestManagerMainProxyChannel,
++            error: IdeviceError::Timeout,
++        })?
++        .map_err(|error| FixedProxyProbeFailure {
++            stage: FixedProxyProbeStage::TestManagerMainProxyChannel,
++            error,
++        })?;
++        drop(channel);
++    }
++
++    // Closing each transport also closes its one requested proxy channel.
++    drop((main, control));
++    Ok(FixedProxyProbeResult {
++        channel_mask: FIXED_PROXY_TESTMANAGER_CTRL | FIXED_PROXY_TESTMANAGER_MAIN,
 +    })
 +}
 diff --git a/idevice/src/services/dvt/mod.rs b/idevice/src/services/dvt/mod.rs

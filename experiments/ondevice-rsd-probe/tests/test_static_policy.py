@@ -36,7 +36,7 @@ class StaticPolicyTests(unittest.TestCase):
         patch = ROOT / "patches/idevice-verify-only-privacy-and-bounds.patch"
         self.assertEqual(
             hashlib.sha256(patch.read_bytes()).hexdigest(),
-            "a7800b38ef6f5a5ab01bdac6a04efa5bb42350b5166c5bf442801dd5bddf934d",
+            "5974ff80668ccdddda705ee98002f6b0cb55bb22fbf2f95e838277e77cbbb425",
         )
         patch_text = patch.read_text()
         self.assertIn("Never emit it via", patch_text)
@@ -45,6 +45,26 @@ class StaticPolicyTests(unittest.TestCase):
         self.assertIn('dep:rand_core_06', patch_text)
         self.assertIn('dtx_channel_probe = ["dvt_core", "rsd", "tunnel_tcp_stack"]', patch_text)
         self.assertIn("probe_fixed_testmanager_connections", patch_text)
+        self.assertIn("probe_fixed_xctestmanager_proxy_channels", patch_text)
+        self.assertEqual(
+            patch_text.count(
+                '+    "dtxproxy:XCTestManager_IDEInterface:XCTestManager_DaemonConnectionInterface";'
+            ),
+            1,
+        )
+        self.assertEqual(
+            patch_text.count(".make_channel(XCTEST_MANAGER_PROXY_IDENTIFIER)"),
+            2,
+        )
+        for forbidden_selector in (
+            "_IDE_initiateControlSession",
+            "_IDE_initiateSessionWithIdentifier",
+            "_IDE_authorizeTestSessionWithProcessID",
+            "launchSuspendedProcessWithDevicePath",
+            "_IDE_startExecutingTestPlan",
+            "XCTestDriverInterface",
+        ):
+            self.assertNotIn(forbidden_selector, patch_text)
         self.assertEqual(patch_text.count('+const TESTMANAGERD: &str = "com.apple.dt.testmanagerd.remote";'), 1)
         self.assertEqual(patch_text.count('+const DTSERVICEHUB: &str = "com.apple.instruments.dtservicehub";'), 1)
         self.assertNotIn("+pub mod process_control;", patch_text)
@@ -67,10 +87,11 @@ class StaticPolicyTests(unittest.TestCase):
                 "jarvis_rsd_hold_start",
                 "jarvis_rsd_hold_check",
                 "jarvis_rsd_hold_dtx_probe",
+                "jarvis_rsd_hold_xctestmanager_proxy_probe",
                 "jarvis_rsd_hold_stop",
             ],
         )
-        self.assertEqual(RUST.count("#[unsafe(no_mangle)]"), 6)
+        self.assertEqual(RUST.count("#[unsafe(no_mangle)]"), 7)
         self.assertIn("HELD_SESSION_MAX_AGE", RUST)
         self.assertIn("Duration::from_secs(10 * 60)", RUST)
 
@@ -84,6 +105,7 @@ class StaticPolicyTests(unittest.TestCase):
                 "jarvis_rsd_hold_start",
                 "jarvis_rsd_hold_check",
                 "jarvis_rsd_hold_dtx_probe",
+                "jarvis_rsd_hold_xctestmanager_proxy_probe",
                 "jarvis_rsd_hold_stop",
             ],
         )
@@ -118,6 +140,8 @@ class StaticPolicyTests(unittest.TestCase):
         self.assertIn("This is not cold recoverability", SWIFT)
         self.assertIn("Probe three fixed DTX transports", SWIFT)
         self.assertIn("does not open a DTX service channel", SWIFT)
+        self.assertIn("Probe two fixed proxy channels", SWIFT)
+        self.assertIn("sends no XCTest session-init", SWIFT)
         self.assertNotIn("launch_runner", RUST + SWIFT + HEADER)
         self.assertNotIn("authorize_test", RUST + SWIFT + HEADER)
         self.assertEqual(SWIFT.count("bootstrap.mobiledevicepairing"), 2)

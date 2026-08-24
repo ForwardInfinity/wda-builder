@@ -56,6 +56,8 @@ final class ProbeController: ObservableObject {
     @Published private(set) var dtxServiceHubReady = false
     @Published private(set) var dtxTestManagerControlReady = false
     @Published private(set) var dtxTestManagerMainReady = false
+    @Published private(set) var proxyControlReady = false
+    @Published private(set) var proxyMainReady = false
 
     private let worker = DispatchQueue(
         label: "com.forwardinfinity.jarvisrsdprobe.worker",
@@ -262,6 +264,7 @@ final class ProbeController: ObservableObject {
         stage = "Local storage"
         clearProbeResult()
         clearDtxResult()
+        clearProxyResult()
     }
 
     func startHeldReadOnlySession() {
@@ -276,6 +279,7 @@ final class ProbeController: ObservableObject {
         stage = "Starting"
         clearProbeResult()
         clearDtxResult()
+        clearProxyResult()
 
         worker.async { [weak self] in
             guard var bytes = PairingRecordStore.read() else {
@@ -359,6 +363,7 @@ final class ProbeController: ObservableObject {
         status = "Opening three fixed DTX transports; no service channel or session init"
         stage = "Gate 2 starting"
         clearDtxResult()
+        clearProxyResult()
 
         worker.async { [weak self] in
             var result = Self.emptyDtxResult()
@@ -384,6 +389,44 @@ final class ProbeController: ObservableObject {
         }
     }
 
+    func runHeldXCTestManagerProxyProbe() {
+        guard !isBusy else { return }
+        guard hasHeldSession else {
+            status = "Gate 3 blocked: no held RSD adapter"
+            stage = "Input"
+            return
+        }
+        isBusy = true
+        status = "Opening and closing two fixed XCTestManager proxy channels"
+        stage = "Gate 3 starting"
+        clearProxyResult()
+
+        worker.async { [weak self] in
+            var result = Self.emptyDtxResult()
+            let returnCode = jarvis_rsd_hold_xctestmanager_proxy_probe(&result)
+            if returnCode != 0 {
+                _ = jarvis_rsd_hold_stop()
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isBusy = false
+                self.stage = Self.stageName(result.stage)
+                if returnCode == 0,
+                   result.abi_version == 1,
+                   result.stage == UInt32(JARVIS_RSD_STAGE_PROXY_COMPLETE) {
+                    self.proxyControlReady =
+                        result.channel_mask & UInt32(JARVIS_XCTESTMANAGER_PROXY_CONTROL) != 0
+                    self.proxyMainReady =
+                        result.channel_mask & UInt32(JARVIS_XCTESTMANAGER_PROXY_MAIN) != 0
+                    self.status = "GATE 3 PROXY CHANNEL PASS — two fixed channels opened and closed"
+                } else {
+                    self.hasHeldSession = false
+                    self.status = "Gate 3 failed closed; held adapter stopped — code \(result.error_code)/\(result.error_subcode)"
+                }
+            }
+        }
+    }
+
     func stopHeldReadOnlySession() {
         guard !isBusy else { return }
         let existed = jarvis_rsd_hold_stop()
@@ -392,6 +435,7 @@ final class ProbeController: ObservableObject {
         stage = "Held continuity"
         clearProbeResult()
         clearDtxResult()
+        clearProxyResult()
     }
 
     func runReadOnlyProbe() {
@@ -521,6 +565,11 @@ final class ProbeController: ObservableObject {
         dtxTestManagerMainReady = false
     }
 
+    private func clearProxyResult() {
+        proxyControlReady = false
+        proxyMainReady = false
+    }
+
     private static func stageName(_ value: UInt32) -> String {
         switch value {
         case UInt32(JARVIS_RSD_STAGE_INPUT): return "Input"
@@ -544,6 +593,15 @@ final class ProbeController: ObservableObject {
         case UInt32(JARVIS_RSD_STAGE_DTX_TESTMANAGER_MAIN_TCP): return "testmanagerd main TCP"
         case UInt32(JARVIS_RSD_STAGE_DTX_TESTMANAGER_MAIN_HANDSHAKE): return "testmanagerd main DTX"
         case UInt32(JARVIS_RSD_STAGE_DTX_COMPLETE): return "Gate 2 complete"
+        case UInt32(JARVIS_RSD_STAGE_PROXY_RSD_TCP): return "Gate 3 RSD TCP"
+        case UInt32(JARVIS_RSD_STAGE_PROXY_RSD_HANDSHAKE): return "Gate 3 RSD handshake"
+        case UInt32(JARVIS_RSD_STAGE_PROXY_TESTMANAGER_CTRL_TCP): return "Gate 3 control TCP"
+        case UInt32(JARVIS_RSD_STAGE_PROXY_TESTMANAGER_CTRL_HANDSHAKE): return "Gate 3 control DTX"
+        case UInt32(JARVIS_RSD_STAGE_PROXY_TESTMANAGER_MAIN_TCP): return "Gate 3 main TCP"
+        case UInt32(JARVIS_RSD_STAGE_PROXY_TESTMANAGER_MAIN_HANDSHAKE): return "Gate 3 main DTX"
+        case UInt32(JARVIS_RSD_STAGE_PROXY_TESTMANAGER_CTRL_CHANNEL): return "Gate 3 control proxy"
+        case UInt32(JARVIS_RSD_STAGE_PROXY_TESTMANAGER_MAIN_CHANNEL): return "Gate 3 main proxy"
+        case UInt32(JARVIS_RSD_STAGE_PROXY_COMPLETE): return "Gate 3 complete"
         default: return "None"
         }
     }

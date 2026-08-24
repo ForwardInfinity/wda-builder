@@ -9,7 +9,7 @@ PATCH="$ROOT/patches/idevice-verify-only-privacy-and-bounds.patch"
 REPOSITORY='https://github.com/jkcoxson/idevice.git'
 COMMIT='63a341d7f624b5c1f2540e4cecb269151a2caf52'
 TREE='ac08b6133eb024eb1a4f06cf25fdd598a79daa72'
-PATCH_SHA256='a7800b38ef6f5a5ab01bdac6a04efa5bb42350b5166c5bf442801dd5bddf934d'
+PATCH_SHA256='5974ff80668ccdddda705ee98002f6b0cb55bb22fbf2f95e838277e77cbbb425'
 MARKER="$VENDOR/.jarvis-patched"
 
 if [[ "${1:-}" == '--refresh' ]]; then

@@ -75,6 +75,9 @@ grep -q 'RSD TRANSPORT PASS' /tmp/jarvis-rsd-probe-app.strings
 grep -q 'com.apple.dt.testmanagerd.remote' /tmp/jarvis-rsd-probe-app.strings
 grep -q 'GATE 2 DTX TRANSPORT PASS' /tmp/jarvis-rsd-probe-app.strings
 grep -q 'does not open a DTX service channel' /tmp/jarvis-rsd-probe-app.strings
+grep -q 'dtxproxy:XCTestManager_IDEInterface:XCTestManager_DaemonConnectionInterface' /tmp/jarvis-rsd-probe-app.strings
+grep -q 'GATE 3 PROXY CHANNEL PASS' /tmp/jarvis-rsd-probe-app.strings
+grep -q 'sends no XCTest session-init' /tmp/jarvis-rsd-probe-app.strings
 for forbidden in \
   'setupManualPairing' \
   '000000' \
@@ -84,8 +87,11 @@ for forbidden in \
   'performIoHidEvent' \
   'localhost:8100' \
   'start-rsd-relay' \
+  '_IDE_initiateControlSessionWithCapabilities:' \
   '_IDE_initiateSessionWithIdentifier:capabilities:' \
   '_IDE_authorizeTestSessionWithProcessID:' \
+  '_IDE_startExecutingTestPlanWithProtocolVersion:' \
+  'dtxproxy:XCTestManager_IDEInterface:XCTestDriverInterface' \
   'launchSuspendedProcessWithDevicePath:bundleIdentifier:environment:arguments:options:' \
   'WebDriverAgent' \
   'XCTRunner'; do
@@ -96,7 +102,7 @@ for forbidden in \
 done
 
 cat > "$APP/JarvisRSDProbeBuild.json" <<'JSON'
-{"experiment":"ondevice-rsd-fixed-dtx-gate","version":2,"endpoint":"10.7.0.1:49152","side_effects":"transport-handshake-only"}
+{"experiment":"ondevice-rsd-fixed-proxy-gate","version":3,"endpoint":"10.7.0.1:49152","side_effects":"fixed-proxy-open-close-only"}
 JSON
 (
   cd "$IOS"

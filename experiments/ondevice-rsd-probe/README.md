@@ -1,6 +1,6 @@
-# Jarvis on-device RSD probe (experimental Gate 0–2)
+# Jarvis on-device RSD probe (experimental Gate 0–3)
 
-This target first tests whether a foreground app can pair-verify the fixed LocalDevVPN peer and complete RSD. Gate 2 then tests only three fixed DTX transport capability handshakes over an already-held adapter.
+This target first tests whether a foreground app can pair-verify the fixed LocalDevVPN peer and complete RSD. Gate 2 tests three fixed DTX transport capability handshakes. Gate 3 is limited to opening and closing two fixed XCTestManager proxy channels over an already-held adapter.
 
 It is deliberately separate from production Agent v19.
 
@@ -15,7 +15,9 @@ It is deliberately separate from production Agent v19.
 - No PIN callback or pair-setup entry point is exported.
 - It checks only four compile-time service names and returns a bit mask/count.
 - Gate 1 has no DTX operation. Gate 2 compiles only the DTX message/transport core needed for three fixed capability handshakes.
-- Gate 2 does not compile process-control, screenshot, XCTest orchestration, installation proxy, runner launch, WDA, HID, or passcode access.
+- Gate 2–3 do not compile process-control, screenshot, XCTest orchestration, installation proxy, runner launch, WDA, HID, or passcode access.
+- Gate 3 sends only two fixed `_requestChannelWithCode:identifier:` requests for `dtxproxy:XCTestManager_IDEInterface:XCTestManager_DaemonConnectionInterface`, then closes both channels and transports.
+- Gate 3 contains no XCTest session-init, authorization, driver-channel, test-plan, process-launch, or runner operation.
 - Pairing data is bounded to 256 KiB, validated locally, and stored as `AfterFirstUnlockThisDeviceOnly` in a non-synchronizing Keychain item.
 - USB bootstrap can stage only `Documents/bootstrap.mobiledevicepairing`; the app reads it only inside its data-protected sandbox, validates it, moves it to Keychain, overwrites/removes the staged file, and rolls back Keychain if cleanup fails.
 - One fixed `NWConnection` may invoke the official Local Network permission flow; it uses the same endpoint and sends no application data. No Bonjour browser or listener is compiled.
@@ -66,4 +68,4 @@ This proves warm on-device RSD continuity only. It does not prove direct testman
 
 This is a **warm on-device DTX-transport continuity PASS**. It does not prove fresh Cellular pairing, cold recovery, an on-device XCTest controller, or UI control. See `demo/2026-08-24_gate2-fixed-dtx-transport-pass.txt`.
 
-No secret-bearing or UI-control action is permitted in this target. Any increase to XCTest session initialization, authorization, or runner launch requires a separately authorized gate.
+No secret-bearing or UI-control action is permitted in this target. Gate 3 was explicitly authorized and remains bounded to fixed proxy-channel open/close. XCTest session initialization, authorization, and runner launch each remain outside this authorization.

@@ -4,7 +4,8 @@
 //! - the only network destination is the LocalDevVPN fake peer 10.7.0.1:49152;
 //! - only pair-verify is attempted; pair-setup and PIN callbacks are unreachable;
 //! - no service port, address, pairing record, UUID, or raw error text is returned;
-//! - no relay, generic socket, DVT, XCTest, WDA, HID, or process API is exported.
+//! - no relay, generic transport, XCTest session, runner, WDA, HID, or process API is exported;
+//! - Gate 2–3 expose only fixed DTX handshakes and fixed proxy-channel open/close actions.
 
 use std::future::Future;
 use std::io;
@@ -19,7 +20,8 @@ use idevice::remote_pairing::{
 };
 use idevice::rsd::RsdHandshake;
 use idevice::services::dvt::fixed_channel_probe::{
-    FixedDtxProbeStage, probe_fixed_testmanager_connections,
+    FixedDtxProbeStage, FixedProxyProbeStage, probe_fixed_testmanager_connections,
+    probe_fixed_xctestmanager_proxy_channels,
 };
 use idevice::tcp::adapter::Adapter;
 use idevice::tcp::handle::AdapterHandle;
@@ -59,6 +61,15 @@ pub const STAGE_DTX_TESTMANAGER_CTRL_HANDSHAKE: u32 = 25;
 pub const STAGE_DTX_TESTMANAGER_MAIN_TCP: u32 = 26;
 pub const STAGE_DTX_TESTMANAGER_MAIN_HANDSHAKE: u32 = 27;
 pub const STAGE_DTX_COMPLETE: u32 = 28;
+pub const STAGE_PROXY_RSD_TCP: u32 = 30;
+pub const STAGE_PROXY_RSD_HANDSHAKE: u32 = 31;
+pub const STAGE_PROXY_TESTMANAGER_CTRL_TCP: u32 = 32;
+pub const STAGE_PROXY_TESTMANAGER_CTRL_HANDSHAKE: u32 = 33;
+pub const STAGE_PROXY_TESTMANAGER_MAIN_TCP: u32 = 34;
+pub const STAGE_PROXY_TESTMANAGER_MAIN_HANDSHAKE: u32 = 35;
+pub const STAGE_PROXY_TESTMANAGER_CTRL_CHANNEL: u32 = 36;
+pub const STAGE_PROXY_TESTMANAGER_MAIN_CHANNEL: u32 = 37;
+pub const STAGE_PROXY_COMPLETE: u32 = 38;
 
 const ERROR_INVALID_INPUT: i32 = -7_001;
 const ERROR_PAIRING_MISMATCH: i32 = -7_002;
@@ -197,10 +208,7 @@ where
     }
 }
 
-async fn bounded_tcp_connect(
-    stage: u32,
-    target: SocketAddr,
-) -> Result<TcpStream, ProbeFailure> {
+async fn bounded_tcp_connect(stage: u32, target: SocketAddr) -> Result<TcpStream, ProbeFailure> {
     match tokio::time::timeout(OPERATION_TIMEOUT, TcpStream::connect(target)).await {
         Ok(Ok(stream)) => Ok(stream),
         Ok(Err(error)) => Err(ProbeFailure::from_socket(stage, error)),
@@ -324,10 +332,7 @@ async fn check_held_session() -> Result<JarvisRsdProbeResult, ProbeFailure> {
             .as_ref()
             .ok_or_else(|| ProbeFailure::fixed(STAGE_INPUT, ERROR_NO_HELD_SESSION))?;
         if session.created_at.elapsed() > HELD_SESSION_MAX_AGE {
-            return Err(ProbeFailure::fixed(
-                STAGE_INPUT,
-                ERROR_HELD_SESSION_EXPIRED,
-            ));
+            return Err(ProbeFailure::fixed(STAGE_INPUT, ERROR_HELD_SESSION_EXPIRED));
         }
         (session.adapter.clone(), session.rsd_port)
     };
@@ -380,11 +385,7 @@ async fn probe_held_dtx_channels() -> Result<JarvisDtxProbeResult, ProbeFailure>
         .await
         .map_err(|_| ProbeFailure::fixed(STAGE_DTX_RSD_TCP, ERROR_TIMEOUT))?
         .map_err(|_| ProbeFailure::fixed(STAGE_DTX_RSD_TCP, ERROR_ADAPTER_CONNECT))?;
-    let handshake = bounded(
-        STAGE_DTX_RSD_HANDSHAKE,
-        RsdHandshake::new(rsd_stream),
-    )
-    .await?;
+    let handshake = bounded(STAGE_DTX_RSD_HANDSHAKE, RsdHandshake::new(rsd_stream)).await?;
     let result = probe_fixed_testmanager_connections(&mut adapter, &handshake)
         .await
         .map_err(|failure| ProbeFailure::from_idevice(dtx_stage(failure.stage), failure.error))?;
@@ -392,6 +393,52 @@ async fn probe_held_dtx_channels() -> Result<JarvisDtxProbeResult, ProbeFailure>
     Ok(JarvisDtxProbeResult {
         abi_version: ABI_VERSION,
         stage: STAGE_DTX_COMPLETE,
+        error_code: 0,
+        error_subcode: 0,
+        channel_mask: result.channel_mask,
+    })
+}
+
+fn proxy_stage(stage: FixedProxyProbeStage) -> u32 {
+    match stage {
+        FixedProxyProbeStage::TestManagerCtrlTcp => STAGE_PROXY_TESTMANAGER_CTRL_TCP,
+        FixedProxyProbeStage::TestManagerCtrlHandshake => STAGE_PROXY_TESTMANAGER_CTRL_HANDSHAKE,
+        FixedProxyProbeStage::TestManagerMainTcp => STAGE_PROXY_TESTMANAGER_MAIN_TCP,
+        FixedProxyProbeStage::TestManagerMainHandshake => STAGE_PROXY_TESTMANAGER_MAIN_HANDSHAKE,
+        FixedProxyProbeStage::TestManagerCtrlProxyChannel => STAGE_PROXY_TESTMANAGER_CTRL_CHANNEL,
+        FixedProxyProbeStage::TestManagerMainProxyChannel => STAGE_PROXY_TESTMANAGER_MAIN_CHANNEL,
+    }
+}
+
+async fn probe_held_xctestmanager_proxy_channels() -> Result<JarvisDtxProbeResult, ProbeFailure> {
+    let (mut adapter, rsd_port) = {
+        let held = HELD_SESSION
+            .lock()
+            .map_err(|_| ProbeFailure::fixed(STAGE_PROXY_RSD_TCP, ERROR_RUNTIME))?;
+        let session = held
+            .as_ref()
+            .ok_or_else(|| ProbeFailure::fixed(STAGE_PROXY_RSD_TCP, ERROR_NO_HELD_SESSION))?;
+        if session.created_at.elapsed() > HELD_SESSION_MAX_AGE {
+            return Err(ProbeFailure::fixed(
+                STAGE_PROXY_RSD_TCP,
+                ERROR_HELD_SESSION_EXPIRED,
+            ));
+        }
+        (session.adapter.clone(), session.rsd_port)
+    };
+
+    let rsd_stream = tokio::time::timeout(OPERATION_TIMEOUT, adapter.connect(rsd_port))
+        .await
+        .map_err(|_| ProbeFailure::fixed(STAGE_PROXY_RSD_TCP, ERROR_TIMEOUT))?
+        .map_err(|_| ProbeFailure::fixed(STAGE_PROXY_RSD_TCP, ERROR_ADAPTER_CONNECT))?;
+    let handshake = bounded(STAGE_PROXY_RSD_HANDSHAKE, RsdHandshake::new(rsd_stream)).await?;
+    let result = probe_fixed_xctestmanager_proxy_channels(&mut adapter, &handshake)
+        .await
+        .map_err(|failure| ProbeFailure::from_idevice(proxy_stage(failure.stage), failure.error))?;
+
+    Ok(JarvisDtxProbeResult {
+        abi_version: ABI_VERSION,
+        stage: STAGE_PROXY_COMPLETE,
         error_code: 0,
         error_subcode: 0,
         channel_mask: result.channel_mask,
@@ -406,10 +453,7 @@ async fn probe_held_dtx_channels() -> Result<JarvisDtxProbeResult, ProbeFailure>
 /// # Safety
 /// `data` must point to `length` readable bytes for the duration of the call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn jarvis_rsd_pairing_record_is_valid(
-    data: *const u8,
-    length: usize,
-) -> i32 {
+pub unsafe extern "C" fn jarvis_rsd_pairing_record_is_valid(data: *const u8, length: usize) -> i32 {
     pairing_bytes(data, length)
         .and_then(|bytes| parse_pairing(bytes).ok())
         .map_or(0, |_| 1)
@@ -578,9 +622,7 @@ pub unsafe extern "C" fn jarvis_rsd_hold_start(
 /// # Safety
 /// `output` must be a valid writable pointer for the duration of the call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn jarvis_rsd_hold_check(
-    output: *mut JarvisRsdProbeResult,
-) -> i32 {
+pub unsafe extern "C" fn jarvis_rsd_hold_check(output: *mut JarvisRsdProbeResult) -> i32 {
     if output.is_null() {
         return -1;
     }
@@ -632,9 +674,7 @@ pub unsafe extern "C" fn jarvis_rsd_hold_check(
 /// # Safety
 /// `output` must be a valid writable pointer for the duration of the call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn jarvis_rsd_hold_dtx_probe(
-    output: *mut JarvisDtxProbeResult,
-) -> i32 {
+pub unsafe extern "C" fn jarvis_rsd_hold_dtx_probe(output: *mut JarvisDtxProbeResult) -> i32 {
     if output.is_null() {
         return -1;
     }
@@ -659,6 +699,60 @@ pub unsafe extern "C" fn jarvis_rsd_hold_dtx_probe(
     };
 
     match runtime.block_on(probe_held_dtx_channels()) {
+        Ok(result) => {
+            unsafe { *output = result };
+            0
+        }
+        Err(failure) => {
+            if failure.code == ERROR_HELD_SESSION_EXPIRED
+                && let Ok(mut held) = HELD_SESSION.lock()
+            {
+                *held = None;
+            }
+            unsafe {
+                (*output).stage = failure.stage;
+                (*output).error_code = failure.code;
+                (*output).error_subcode = failure.subcode;
+            }
+            -1
+        }
+    }
+}
+
+/// Opens exactly two fixed XCTestManager proxy channels over two fixed
+/// testmanagerd transports, then closes their channel handles and transports.
+/// It sends no XCTest session-init, authorization, or runner-launch selector.
+///
+/// # Safety
+/// `output` must be a valid writable pointer for the duration of the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jarvis_rsd_hold_xctestmanager_proxy_probe(
+    output: *mut JarvisDtxProbeResult,
+) -> i32 {
+    if output.is_null() {
+        return -1;
+    }
+    unsafe {
+        *output = JarvisDtxProbeResult {
+            abi_version: ABI_VERSION,
+            stage: STAGE_PROXY_RSD_TCP,
+            error_code: ERROR_NO_HELD_SESSION,
+            ..JarvisDtxProbeResult::default()
+        };
+    }
+    let Ok(_guard) = PROBE_LOCK.try_lock() else {
+        unsafe { (*output).error_code = ERROR_BUSY };
+        return -1;
+    };
+    let runtime = match runtime() {
+        Ok(runtime) => runtime,
+        Err(failure) => {
+            unsafe { (*output).error_code = failure.code };
+            return -1;
+        }
+    };
+
+    match runtime.block_on(probe_held_xctestmanager_proxy_channels()) {
         Ok(result) => {
             unsafe { *output = result };
             0
@@ -712,7 +806,10 @@ mod tests {
             unsafe { jarvis_rsd_pairing_record_is_valid(malformed.as_ptr(), malformed.len()) },
             0
         );
-        assert_eq!(unsafe { jarvis_rsd_pairing_record_is_valid(std::ptr::null(), 1) }, 0);
+        assert_eq!(
+            unsafe { jarvis_rsd_pairing_record_is_valid(std::ptr::null(), 1) },
+            0
+        );
         let byte = 0_u8;
         assert_eq!(
             unsafe {
@@ -741,16 +838,12 @@ mod tests {
 
     #[test]
     fn numeric_socket_diagnostic_is_bounded() {
-        let failure = ProbeFailure::from_socket(
-            STAGE_TCP_CONNECT,
-            io::Error::from_raw_os_error(61),
-        );
+        let failure =
+            ProbeFailure::from_socket(STAGE_TCP_CONNECT, io::Error::from_raw_os_error(61));
         assert_eq!(failure.code, 1);
         assert_eq!(failure.subcode, 61);
-        let failure = ProbeFailure::from_socket(
-            STAGE_TCP_CONNECT,
-            io::Error::other("not exported"),
-        );
+        let failure =
+            ProbeFailure::from_socket(STAGE_TCP_CONNECT, io::Error::other("not exported"));
         assert_eq!(failure.subcode, -1);
     }
 
@@ -760,12 +853,25 @@ mod tests {
         assert_eq!(std::mem::align_of::<JarvisRsdProbeResult>(), 8);
         assert_eq!(std::mem::size_of::<JarvisDtxProbeResult>(), 20);
         assert_eq!(std::mem::align_of::<JarvisDtxProbeResult>(), 4);
+        assert_eq!(
+            unsafe { jarvis_rsd_hold_xctestmanager_proxy_probe(std::ptr::null_mut()) },
+            -1
+        );
+        assert_eq!(STAGE_PROXY_RSD_TCP, 30);
+        assert_eq!(STAGE_PROXY_TESTMANAGER_CTRL_CHANNEL, 36);
+        assert_eq!(STAGE_PROXY_TESTMANAGER_MAIN_CHANNEL, 37);
+        assert_eq!(STAGE_PROXY_COMPLETE, 38);
         assert_eq!(TARGET.to_string(), "10.7.0.1:49152");
         assert_eq!(
             idevice::services::dvt::fixed_channel_probe::FIXED_DTX_DTSERVICEHUB
                 | idevice::services::dvt::fixed_channel_probe::FIXED_DTX_TESTMANAGER_CTRL
                 | idevice::services::dvt::fixed_channel_probe::FIXED_DTX_TESTMANAGER_MAIN,
             0x07
+        );
+        assert_eq!(
+            idevice::services::dvt::fixed_channel_probe::FIXED_PROXY_TESTMANAGER_CTRL
+                | idevice::services::dvt::fixed_channel_probe::FIXED_PROXY_TESTMANAGER_MAIN,
+            0x03
         );
         assert_eq!(
             SERVICE_TESTMANAGERD

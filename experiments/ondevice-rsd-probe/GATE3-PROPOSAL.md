@@ -1,6 +1,6 @@
 # Proposed Gate 3: fixed XCTestManager proxy-channel open/close
 
-Status: **not authorized and not implemented**.
+Status: **explicitly authorized; bounded implementation and validation in progress**.
 
 Gate 2 proved three fixed TCP/DTX capability handshakes. It deliberately used only each connection's root DTX channel. The next smallest capability increase is to request the two fixed XCTestManager service channels and immediately close them, without sending an XCTest session message.
 
@@ -50,6 +50,8 @@ Starting from an existing, unexpired held RSD adapter:
 
 A DTX proxy-channel request is a real protocol capability increase beyond Gate 2's root capability handshake. However, it still stops before XCTest session initialization, authorization prompts, runner launch, or UI control. Those remain separately gated.
 
-Implementation and device testing require the explicit phrase:
+Authorization received verbatim:
 
 > **Tiếp tục Gate 3**
+
+This authorization covers only the fixed proxy-channel open/close action above. It does not authorize XCTest session initialization, authorization, runner launch, WDA, HID, or UI control.
