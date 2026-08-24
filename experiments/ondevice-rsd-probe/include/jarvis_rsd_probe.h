@@ -51,6 +51,17 @@ int32_t jarvis_rsd_probe(const uint8_t *data,
                          size_t length,
                          JarvisRsdProbeResult *output);
 
+/** Open and retain one bounded verify-only adapter for warm continuity. */
+int32_t jarvis_rsd_hold_start(const uint8_t *data,
+                              size_t length,
+                              JarvisRsdProbeResult *output);
+
+/** Re-run only the RSD handshake over the retained adapter. */
+int32_t jarvis_rsd_hold_check(JarvisRsdProbeResult *output);
+
+/** Drop the retained adapter. Returns 1 if one existed, else 0. */
+int32_t jarvis_rsd_hold_stop(void);
+
 #ifdef __cplusplus
 }
 #endif

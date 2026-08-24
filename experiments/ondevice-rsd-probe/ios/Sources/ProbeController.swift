@@ -46,6 +46,7 @@ private func makeFixedServices(mask: UInt32) -> [FixedServiceStatus] {
 @MainActor
 final class ProbeController: ObservableObject {
     @Published private(set) var hasPairingRecord = PairingRecordStore.isPresent
+    @Published private(set) var hasHeldSession = false
     @Published private(set) var isBusy = false
     @Published private(set) var status = "Idle — no network operation has run"
     @Published private(set) var stage = "None"
@@ -250,10 +251,104 @@ final class ProbeController: ObservableObject {
 
     func deletePairingRecord() {
         guard !isBusy else { return }
+        _ = jarvis_rsd_hold_stop()
+        hasHeldSession = false
         let removed = PairingRecordStore.delete()
         hasPairingRecord = PairingRecordStore.isPresent
         status = removed ? "Pairing record removed" : "Pairing record removal failed"
         stage = "Local storage"
+        clearProbeResult()
+    }
+
+    func startHeldReadOnlySession() {
+        guard !isBusy else { return }
+        guard hasPairingRecord else {
+            status = "Held session blocked: pairing record is absent"
+            stage = "Input"
+            return
+        }
+        isBusy = true
+        status = "Opening one bounded held read-only RSD session"
+        stage = "Starting"
+        clearProbeResult()
+
+        worker.async { [weak self] in
+            guard var bytes = PairingRecordStore.read() else {
+                DispatchQueue.main.async {
+                    self?.finishLocalFailure("Held session blocked: pairing record could not be read")
+                }
+                return
+            }
+            defer {
+                if !bytes.isEmpty {
+                    bytes.resetBytes(in: 0..<bytes.count)
+                }
+            }
+            var result = Self.emptyResult()
+            let returnCode: Int32 = bytes.withUnsafeBytes { rawBuffer in
+                let base = rawBuffer.bindMemory(to: UInt8.self).baseAddress
+                return jarvis_rsd_hold_start(base, rawBuffer.count, &result)
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isBusy = false
+                self.stage = Self.stageName(result.stage)
+                if returnCode == 0,
+                   result.abi_version == 1,
+                   result.stage == UInt32(JARVIS_RSD_STAGE_COMPLETE) {
+                    self.hasHeldSession = true
+                    self.applySuccessfulResult(result)
+                    self.status = "HELD RSD SESSION READY — foreground warm-continuity gate only"
+                } else {
+                    self.hasHeldSession = false
+                    self.status = "Held session failed closed — code \(result.error_code)/\(result.error_subcode)"
+                }
+            }
+        }
+    }
+
+    func checkHeldReadOnlySession() {
+        guard !isBusy else { return }
+        guard hasHeldSession else {
+            status = "Held continuity check blocked: no held session"
+            stage = "Input"
+            return
+        }
+        isBusy = true
+        status = "Checking retained adapter with one read-only RSD handshake"
+        stage = "Held continuity"
+        clearProbeResult()
+
+        worker.async { [weak self] in
+            var result = Self.emptyResult()
+            let returnCode = jarvis_rsd_hold_check(&result)
+            if returnCode != 0 {
+                _ = jarvis_rsd_hold_stop()
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isBusy = false
+                self.stage = Self.stageName(result.stage)
+                if returnCode == 0,
+                   result.abi_version == 1,
+                   result.stage == UInt32(JARVIS_RSD_STAGE_COMPLETE) {
+                    self.hasHeldSession = true
+                    self.applySuccessfulResult(result)
+                    self.status = "HELD RSD CONTINUITY PASS — existing adapter remained usable"
+                } else {
+                    self.hasHeldSession = false
+                    self.status = "Held continuity failed closed — code \(result.error_code)/\(result.error_subcode)"
+                }
+            }
+        }
+    }
+
+    func stopHeldReadOnlySession() {
+        guard !isBusy else { return }
+        let existed = jarvis_rsd_hold_stop()
+        hasHeldSession = false
+        status = existed == 1 ? "Held read-only session stopped" : "No held session was active"
+        stage = "Held continuity"
         clearProbeResult()
     }
 
@@ -321,6 +416,24 @@ final class ProbeController: ObservableObject {
             try Data(repeating: 0, count: byteCount).write(to: url, options: [])
         }
         try fileManager.removeItem(at: url)
+    }
+
+    private nonisolated static func emptyResult() -> JarvisRsdProbeResult {
+        JarvisRsdProbeResult(
+            abi_version: 0,
+            stage: 0,
+            error_code: 0,
+            error_subcode: 0,
+            protocol_version: 0,
+            service_mask: 0,
+            service_count: 0
+        )
+    }
+
+    private func applySuccessfulResult(_ result: JarvisRsdProbeResult) {
+        protocolVersion = result.protocol_version
+        advertisedServiceCount = result.service_count
+        services = makeFixedServices(mask: result.service_mask)
     }
 
     private func finishFixedLocalNetworkRequest(

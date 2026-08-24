@@ -19,12 +19,14 @@ use idevice::remote_pairing::{
 };
 use idevice::rsd::RsdHandshake;
 use idevice::tcp::adapter::Adapter;
+use idevice::tcp::handle::AdapterHandle;
 use tokio::net::TcpStream;
 use tokio::runtime::{Builder, Runtime};
 
 const ABI_VERSION: u32 = 1;
 const MAX_PAIRING_BYTES: usize = 256 * 1024;
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(8);
+const HELD_SESSION_MAX_AGE: Duration = Duration::from_secs(10 * 60);
 const TARGET: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 7, 0, 1)), 49_152);
 const HOSTNAME: &str = "JarvisRSDProbe";
 
@@ -53,6 +55,8 @@ const ERROR_RUNTIME: i32 = -7_004;
 const ERROR_BUSY: i32 = -7_005;
 const ERROR_TUNNEL_PARAMETERS: i32 = -7_006;
 const ERROR_ADAPTER_CONNECT: i32 = -7_007;
+const ERROR_NO_HELD_SESSION: i32 = -7_008;
+const ERROR_HELD_SESSION_EXPIRED: i32 = -7_009;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -105,8 +109,15 @@ impl ProbeFailure {
     }
 }
 
+struct HeldSession {
+    adapter: AdapterHandle,
+    rsd_port: u16,
+    created_at: std::time::Instant,
+}
+
 static RUNTIME: OnceLock<Result<Runtime, ()>> = OnceLock::new();
 static PROBE_LOCK: Mutex<()> = Mutex::new(());
+static HELD_SESSION: Mutex<Option<HeldSession>> = Mutex::new(None);
 
 fn runtime() -> Result<&'static Runtime, ProbeFailure> {
     RUNTIME
@@ -204,7 +215,9 @@ fn service_mask(handshake: &RsdHandshake) -> u32 {
     mask
 }
 
-async fn run_probe(mut pairing: RpPairingFile) -> Result<JarvisRsdProbeResult, ProbeFailure> {
+async fn open_probe_session(
+    mut pairing: RpPairingFile,
+) -> Result<(JarvisRsdProbeResult, AdapterHandle, u16), ProbeFailure> {
     let stream = bounded_tcp_connect(STAGE_TCP_CONNECT, TARGET).await?;
     let socket = RpPairingSocket::new(stream);
     let mut client = RemotePairingClient::new(socket, HOSTNAME);
@@ -263,6 +276,45 @@ async fn run_probe(mut pairing: RpPairingFile) -> Result<JarvisRsdProbeResult, P
         .map_err(|_| ProbeFailure::fixed(STAGE_RSD_TCP, ERROR_ADAPTER_CONNECT))?;
     let handshake = bounded(STAGE_RSD_HANDSHAKE, RsdHandshake::new(rsd_stream)).await?;
 
+    let result = JarvisRsdProbeResult {
+        abi_version: ABI_VERSION,
+        stage: STAGE_COMPLETE,
+        error_code: 0,
+        error_subcode: 0,
+        protocol_version: handshake.protocol_version as u64,
+        service_mask: service_mask(&handshake),
+        service_count: handshake.services.len().min(u32::MAX as usize) as u32,
+    };
+    Ok((result, adapter, rsd_port))
+}
+
+async fn run_probe(pairing: RpPairingFile) -> Result<JarvisRsdProbeResult, ProbeFailure> {
+    let (result, _adapter, _rsd_port) = open_probe_session(pairing).await?;
+    Ok(result)
+}
+
+async fn check_held_session() -> Result<JarvisRsdProbeResult, ProbeFailure> {
+    let (mut adapter, rsd_port) = {
+        let held = HELD_SESSION
+            .lock()
+            .map_err(|_| ProbeFailure::fixed(STAGE_INPUT, ERROR_RUNTIME))?;
+        let session = held
+            .as_ref()
+            .ok_or_else(|| ProbeFailure::fixed(STAGE_INPUT, ERROR_NO_HELD_SESSION))?;
+        if session.created_at.elapsed() > HELD_SESSION_MAX_AGE {
+            return Err(ProbeFailure::fixed(
+                STAGE_INPUT,
+                ERROR_HELD_SESSION_EXPIRED,
+            ));
+        }
+        (session.adapter.clone(), session.rsd_port)
+    };
+
+    let rsd_stream = tokio::time::timeout(OPERATION_TIMEOUT, adapter.connect(rsd_port))
+        .await
+        .map_err(|_| ProbeFailure::fixed(STAGE_RSD_TCP, ERROR_TIMEOUT))?
+        .map_err(|_| ProbeFailure::fixed(STAGE_RSD_TCP, ERROR_ADAPTER_CONNECT))?;
+    let handshake = bounded(STAGE_RSD_HANDSHAKE, RsdHandshake::new(rsd_stream)).await?;
     Ok(JarvisRsdProbeResult {
         abi_version: ABI_VERSION,
         stage: STAGE_COMPLETE,
@@ -369,6 +421,148 @@ pub unsafe extern "C" fn jarvis_rsd_probe(
             -1
         }
     }
+}
+
+/// Opens one verify-only RSD tunnel and retains only its userspace adapter for
+/// a bounded warm-continuity experiment. It does not open a DVT service.
+///
+/// # Safety
+/// `data` must point to `length` readable bytes and `output` must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jarvis_rsd_hold_start(
+    data: *const u8,
+    length: usize,
+    output: *mut JarvisRsdProbeResult,
+) -> i32 {
+    if output.is_null() {
+        return -1;
+    }
+    unsafe {
+        *output = JarvisRsdProbeResult {
+            abi_version: ABI_VERSION,
+            stage: STAGE_INPUT,
+            error_code: ERROR_INVALID_INPUT,
+            ..JarvisRsdProbeResult::default()
+        };
+    }
+    let Some(bytes) = pairing_bytes(data, length) else {
+        return -1;
+    };
+    let pairing = match parse_pairing(bytes) {
+        Ok(pairing) => pairing,
+        Err(failure) => {
+            unsafe {
+                (*output).stage = failure.stage;
+                (*output).error_code = failure.code;
+                (*output).error_subcode = failure.subcode;
+            }
+            return -1;
+        }
+    };
+    let Ok(_guard) = PROBE_LOCK.try_lock() else {
+        unsafe { (*output).error_code = ERROR_BUSY };
+        return -1;
+    };
+    let runtime = match runtime() {
+        Ok(runtime) => runtime,
+        Err(failure) => {
+            unsafe {
+                (*output).stage = failure.stage;
+                (*output).error_code = failure.code;
+                (*output).error_subcode = failure.subcode;
+            }
+            return -1;
+        }
+    };
+
+    match runtime.block_on(open_probe_session(pairing)) {
+        Ok((result, adapter, rsd_port)) => {
+            let Ok(mut held) = HELD_SESSION.lock() else {
+                unsafe { (*output).error_code = ERROR_RUNTIME };
+                return -1;
+            };
+            *held = Some(HeldSession {
+                adapter,
+                rsd_port,
+                created_at: std::time::Instant::now(),
+            });
+            unsafe { *output = result };
+            0
+        }
+        Err(failure) => {
+            unsafe {
+                (*output).stage = failure.stage;
+                (*output).error_code = failure.code;
+                (*output).error_subcode = failure.subcode;
+            }
+            -1
+        }
+    }
+}
+
+/// Re-runs only the read-only RSD handshake over the retained adapter.
+/// No pairing record, host, port, or service selector is accepted.
+///
+/// # Safety
+/// `output` must be a valid writable pointer for the duration of the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jarvis_rsd_hold_check(
+    output: *mut JarvisRsdProbeResult,
+) -> i32 {
+    if output.is_null() {
+        return -1;
+    }
+    unsafe {
+        *output = JarvisRsdProbeResult {
+            abi_version: ABI_VERSION,
+            stage: STAGE_INPUT,
+            error_code: ERROR_NO_HELD_SESSION,
+            ..JarvisRsdProbeResult::default()
+        };
+    }
+    let Ok(_guard) = PROBE_LOCK.try_lock() else {
+        unsafe { (*output).error_code = ERROR_BUSY };
+        return -1;
+    };
+    let runtime = match runtime() {
+        Ok(runtime) => runtime,
+        Err(failure) => {
+            unsafe { (*output).error_code = failure.code };
+            return -1;
+        }
+    };
+
+    match runtime.block_on(check_held_session()) {
+        Ok(result) => {
+            unsafe { *output = result };
+            0
+        }
+        Err(failure) => {
+            if failure.code == ERROR_HELD_SESSION_EXPIRED
+                && let Ok(mut held) = HELD_SESSION.lock()
+            {
+                *held = None;
+            }
+            unsafe {
+                (*output).stage = failure.stage;
+                (*output).error_code = failure.code;
+                (*output).error_subcode = failure.subcode;
+            }
+            -1
+        }
+    }
+}
+
+/// Drops the retained read-only adapter. Returns 1 if one existed, else 0.
+#[unsafe(no_mangle)]
+pub extern "C" fn jarvis_rsd_hold_stop() -> i32 {
+    let Ok(_guard) = PROBE_LOCK.try_lock() else {
+        return -1;
+    };
+    let Ok(mut held) = HELD_SESSION.lock() else {
+        return -1;
+    };
+    i32::from(held.take().is_some())
 }
 
 #[cfg(test)]

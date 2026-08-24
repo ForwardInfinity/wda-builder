@@ -51,18 +51,32 @@ class StaticPolicyTests(unittest.TestCase):
         self.assertIn("client.attempt_pair_verify()", RUST)
         self.assertIn("client.validate_pairing(&mut pairing)", RUST)
         self.assertNotRegex(RUST, r"client\.(?:connect|pair)\s*\(")
-        exports = re.findall(r'pub unsafe extern "C" fn (jarvis_[a-z0-9_]+)', RUST)
+        exports = re.findall(r'pub (?:unsafe )?extern "C" fn (jarvis_[a-z0-9_]+)', RUST)
         self.assertEqual(
             exports,
-            ["jarvis_rsd_pairing_record_is_valid", "jarvis_rsd_probe"],
+            [
+                "jarvis_rsd_pairing_record_is_valid",
+                "jarvis_rsd_probe",
+                "jarvis_rsd_hold_start",
+                "jarvis_rsd_hold_check",
+                "jarvis_rsd_hold_stop",
+            ],
         )
-        self.assertEqual(RUST.count("#[unsafe(no_mangle)]"), 2)
+        self.assertEqual(RUST.count("#[unsafe(no_mangle)]"), 5)
+        self.assertIn("HELD_SESSION_MAX_AGE", RUST)
+        self.assertIn("Duration::from_secs(10 * 60)", RUST)
 
     def test_header_exposes_no_generic_transport(self):
         functions = re.findall(r"^int32_t (jarvis_[a-z0-9_]+)\(", HEADER, re.MULTILINE)
         self.assertEqual(
             functions,
-            ["jarvis_rsd_pairing_record_is_valid", "jarvis_rsd_probe"],
+            [
+                "jarvis_rsd_pairing_record_is_valid",
+                "jarvis_rsd_probe",
+                "jarvis_rsd_hold_start",
+                "jarvis_rsd_hold_check",
+                "jarvis_rsd_hold_stop",
+            ],
         )
         for forbidden in ("host", "port", "url", "command", "payload", "pin"):
             declarations = "\n".join(
@@ -91,6 +105,8 @@ class StaticPolicyTests(unittest.TestCase):
         self.assertIn("AfterFirstUnlockThisDeviceOnly", SWIFT)
         self.assertIn("kSecAttrSynchronizable", SWIFT)
         self.assertIn("Run read-only RSD probe", SWIFT)
+        self.assertIn("Start held read-only RSD session", SWIFT)
+        self.assertIn("This is not cold recoverability", SWIFT)
         self.assertEqual(SWIFT.count("bootstrap.mobiledevicepairing"), 2)
         self.assertIn("removeStagedRecord", SWIFT)
 

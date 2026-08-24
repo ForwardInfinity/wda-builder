@@ -76,10 +76,40 @@ private struct ProbeView: View {
                     } label: {
                         Label("Run read-only RSD probe", systemImage: "network.badge.shield.half.filled")
                     }
-                    .disabled(controller.isBusy || !controller.hasPairingRecord)
+                    .disabled(
+                        controller.isBusy || !controller.hasPairingRecord || controller.hasHeldSession
+                    )
                     if controller.isBusy {
                         ProgressView()
                     }
+                }
+
+                Section("Warm continuity — read-only") {
+                    LabeledContent(
+                        "Held adapter",
+                        value: controller.hasHeldSession ? "Active" : "None"
+                    )
+                    Text("This is not cold recoverability. It only tests whether an already-established userspace RSD adapter survives Wi-Fi to Cellular while this foreground app process remains alive. The hold expires after ten minutes.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button {
+                        controller.startHeldReadOnlySession()
+                    } label: {
+                        Label("Start held read-only RSD session", systemImage: "link.badge.plus")
+                    }
+                    .disabled(
+                        controller.isBusy || !controller.hasPairingRecord || controller.hasHeldSession
+                    )
+                    Button {
+                        controller.checkHeldReadOnlySession()
+                    } label: {
+                        Label("Check held RSD session", systemImage: "checkmark.shield")
+                    }
+                    .disabled(controller.isBusy || !controller.hasHeldSession)
+                    Button("Stop held RSD session", role: .destructive) {
+                        controller.stopHeldReadOnlySession()
+                    }
+                    .disabled(controller.isBusy || !controller.hasHeldSession)
                 }
 
                 Section("Sanitized result") {
