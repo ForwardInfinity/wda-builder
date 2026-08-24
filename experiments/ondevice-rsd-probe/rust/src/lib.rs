@@ -7,6 +7,7 @@
 //! - no relay, generic socket, DVT, XCTest, WDA, HID, or process API is exported.
 
 use std::future::Future;
+use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::slice;
 use std::sync::{Mutex, OnceLock};
@@ -81,6 +82,20 @@ impl ProbeFailure {
         }
     }
 
+    fn from_socket(stage: u32, error: io::Error) -> Self {
+        // Preserve only the bounded numeric errno. No address, payload, raw
+        // error text, identifier, or pairing material crosses the FFI.
+        let subcode = error
+            .raw_os_error()
+            .filter(|value| (1..=4_095).contains(value))
+            .unwrap_or(-1);
+        Self {
+            stage,
+            code: IdeviceError::Socket(error).code(),
+            subcode,
+        }
+    }
+
     fn from_idevice(stage: u32, error: IdeviceError) -> Self {
         Self {
             stage,
@@ -149,6 +164,17 @@ where
     }
 }
 
+async fn bounded_tcp_connect(
+    stage: u32,
+    target: SocketAddr,
+) -> Result<TcpStream, ProbeFailure> {
+    match tokio::time::timeout(OPERATION_TIMEOUT, TcpStream::connect(target)).await {
+        Ok(Ok(stream)) => Ok(stream),
+        Ok(Err(error)) => Err(ProbeFailure::from_socket(stage, error)),
+        Err(_) => Err(ProbeFailure::fixed(stage, ERROR_TIMEOUT)),
+    }
+}
+
 fn service_mask(handshake: &RsdHandshake) -> u32 {
     let mut mask = 0;
     if handshake
@@ -179,10 +205,7 @@ fn service_mask(handshake: &RsdHandshake) -> u32 {
 }
 
 async fn run_probe(mut pairing: RpPairingFile) -> Result<JarvisRsdProbeResult, ProbeFailure> {
-    let stream = bounded(STAGE_TCP_CONNECT, async {
-        TcpStream::connect(TARGET).await.map_err(IdeviceError::from)
-    })
-    .await?;
+    let stream = bounded_tcp_connect(STAGE_TCP_CONNECT, TARGET).await?;
     let socket = RpPairingSocket::new(stream);
     let mut client = RemotePairingClient::new(socket, HOSTNAME);
 
@@ -200,12 +223,7 @@ async fn run_probe(mut pairing: RpPairingFile) -> Result<JarvisRsdProbeResult, P
         ));
     }
     let tunnel_target = SocketAddr::new(TARGET.ip(), tunnel_port);
-    let tunnel_stream = bounded(STAGE_TUNNEL_TCP, async {
-        TcpStream::connect(tunnel_target)
-            .await
-            .map_err(IdeviceError::from)
-    })
-    .await?;
+    let tunnel_stream = bounded_tcp_connect(STAGE_TUNNEL_TCP, tunnel_target).await?;
     let tunnel = bounded(
         STAGE_TUNNEL_TLS,
         connect_tls_psk_tunnel_native(tunnel_stream, client.encryption_key()),
@@ -399,6 +417,21 @@ mod tests {
             unsafe { jarvis_rsd_pairing_record_is_valid(bytes.as_ptr(), bytes.len()) },
             0
         );
+    }
+
+    #[test]
+    fn numeric_socket_diagnostic_is_bounded() {
+        let failure = ProbeFailure::from_socket(
+            STAGE_TCP_CONNECT,
+            io::Error::from_raw_os_error(61),
+        );
+        assert_eq!(failure.code, 1);
+        assert_eq!(failure.subcode, 61);
+        let failure = ProbeFailure::from_socket(
+            STAGE_TCP_CONNECT,
+            io::Error::other("not exported"),
+        );
+        assert_eq!(failure.subcode, -1);
     }
 
     #[test]
