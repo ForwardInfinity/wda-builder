@@ -7,7 +7,7 @@ umask 077
 
 UDID='00008101-00064D1A3A68001E'
 BUNDLE='com.forwardinfinity.jarvisrsdprobe'
-EXPECTED_IPA_SHA256='19895db93ac7e5e8d726c415181042cc84c6cab024edc7415cad183afefc4577'
+EXPECTED_IPA_SHA256='60fb226fa8d82c6138a4406bac1a9270c39668d97be473f776d1bd407ef8c7f4'
 EXPECTED_PAIRING_SHA256='6e210a0515f1af27e4d8ce72b11061886c069415c153a617b5a9f19cc7a57e78'
 PROJECT='/home/huy-nguyen/workspace/iphone-tailnet-control'
 IPA="$PROJECT/artifacts/jarvis-rsd-probe-verify-only-v1-signed.ipa"
