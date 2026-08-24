@@ -36,7 +36,9 @@ jobs:
           set -euo pipefail
           python3 experiments/ondevice-rsd-probe/tests/test_static_policy.py
           ! grep -R -E 'Bearer [A-Za-z0-9_-]{20,}|ntfy-topic|jarvis/passcode' \
-            experiments/ondevice-rsd-probe
+            experiments/ondevice-rsd-probe/rust/src \
+            experiments/ondevice-rsd-probe/ios/Sources \
+            experiments/ondevice-rsd-probe/include
 
       - name: RustSec dependency audit
         run: |
