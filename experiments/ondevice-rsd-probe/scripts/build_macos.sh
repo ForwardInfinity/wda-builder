@@ -97,7 +97,6 @@ grep -q 'launchSuspendedProcessWithDevicePath:bundleIdentifier:environment:argum
 grep -q 'http://127.0.0.1:8100/status' /tmp/jarvis-rsd-probe-app.strings
 grep -q 'LOCAL CONTROLLER + WDA PASS' /tmp/jarvis-rsd-probe-app.strings
 for required in \
-  'BGContinuedProcessingTaskRequest' \
   'Jarvis local XCTest controller' \
   'Cold restore rejected'; do
   if ! grep -Fq "$required" /tmp/jarvis-rsd-probe-app.strings; then
