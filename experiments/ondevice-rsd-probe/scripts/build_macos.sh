@@ -60,6 +60,11 @@ BIN="$APP/JarvisRSDProbe"
 test -x "$BIN"
 /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist" \
   | grep -qx 'com.forwardinfinity.jarvisrsdprobe'
+/usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:0' "$APP/Info.plist" | grep -qx '1'
+if /usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:1' "$APP/Info.plist" >/dev/null 2>&1; then
+  echo 'experimental probe must be iPhone-only' >&2
+  exit 3
+fi
 if /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$APP/Info.plist" >/dev/null 2>&1; then
   echo 'experimental probe must not declare background modes' >&2
   exit 3
