@@ -8,19 +8,15 @@ final class AgentController: ObservableObject {
 
     private let baseURL = URL(string: "https://workbox.tailfd8ac6.ts.net")!
     private let protocolVersion = 1
-    private let agentVersion = "ios-standalone-18"
+    private let agentVersion = "ios-standalone-19"
     private let allowedCommands = Set([
         "ping",
-        "refresh-stream",
         "probe-local-control",
-        "probe-tunnel-services",
-        "probe-private-hid",
         "wda-home",
         "wda-launch-settings",
         "wda-continue-recovery",
         "wda-keyboard-probe",
         "secure-unlock",
-        "start-rsd-relay",
     ])
     private let deviceAccount = "device-id"
     private let tokenAccount = "agent-token"
@@ -89,8 +85,10 @@ final class AgentController: ObservableObject {
             timer.setEventHandler { [weak self] in self?.tick() }
             self.timer = timer
             timer.resume()
-            BackgroundLeaseManager.shared.start()
-            RSDRelayManager.shared.ensureStarted(deviceID: self.deviceID)
+            // V3/V4 recovery streams never reconnected after socket loss and
+            // can survive upgrades in nsurlsessiond. Production uses the
+            // visible iOS 26 Continued Processing heartbeat and cancels them.
+            BackgroundLeaseManager.shared.cancelLegacyTasks()
             self.publish(status: "Connecting")
         }
     }
@@ -108,7 +106,6 @@ final class AgentController: ObservableObject {
     }
 
     func appEnteredBackground() {
-        BackgroundLeaseManager.shared.start()
         scheduleBackgroundRefresh()
         worker.async {
             guard self.backgroundTask == .invalid else { return }
@@ -121,13 +118,10 @@ final class AgentController: ObservableObject {
     }
 
     func appBecameActive() {
-        BackgroundLeaseManager.shared.start()
         worker.async { self.tick() }
     }
 
     func continuedRecoveryPulse() {
-        BackgroundLeaseManager.shared.start()
-        RSDRelayManager.shared.ensureStarted(deviceID: deviceID)
         worker.async { self.tick() }
     }
 
@@ -222,7 +216,6 @@ final class AgentController: ObservableObject {
                     }
                     self.publish(enrolled: true)
                     self.publish(status: "Enrolled; authenticating")
-                    BackgroundLeaseManager.shared.start()
                     self.tick()
                     completion(true)
                     return
@@ -275,34 +268,6 @@ final class AgentController: ObservableObject {
     private func executeCommand(commandID: String, action: String) {
         if action == "ping" {
             completeAndSend(commandID: commandID, action: action, status: "ok", metadata: [:])
-            return
-        }
-        if action == "refresh-stream" {
-            BackgroundLeaseManager.shared.forceReconnect()
-            completeAndSend(
-                commandID: commandID,
-                action: action,
-                status: "ok",
-                metadata: ["effect": "stream-refresh-requested", "control_error": "none"]
-            )
-            return
-        }
-        if action == "start-rsd-relay" {
-            RSDRelayManager.shared.start(deviceID: deviceID) { [weak self] started in
-                guard let self else { return }
-                self.worker.async {
-                    self.completeAndSend(
-                        commandID: commandID,
-                        action: action,
-                        status: started ? "ok" : "error",
-                        metadata: [
-                            "rsd_relay_started": started,
-                            "effect": started ? "rsd-relay-started" : "none",
-                            "control_error": started ? "none" : "rsd-relay-unavailable",
-                        ]
-                    )
-                }
-            }
             return
         }
         LocalControlBridge.shared.perform(action: action, commandID: commandID) { [weak self] result in
@@ -378,14 +343,6 @@ final class AgentController: ObservableObject {
             "cleanup_sent",
             "secret_accessed",
             "unlock_verified",
-            "rsd_relay_started",
-            "tunnel_rsd",
-            "tunnel_testmanager_automation",
-            "tunnel_testmanager",
-            "tunnel_appservice",
-            "private_hid_symbols",
-            "private_hid_client",
-            "private_hid_dispatched",
         ])
         for (key, value) in metadata where allowedMetadata.contains(key) {
             if value is String || value is Int || value is Bool || value is Double {

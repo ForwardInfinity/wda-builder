@@ -101,10 +101,6 @@ final class LocalControlBridge {
         switch action {
         case "probe-local-control":
             probeLocalControl(completion: completion)
-        case "probe-tunnel-services":
-            probeFixedTunnelServices(completion: completion)
-        case "probe-private-hid":
-            probePrivateHID(completion: completion)
         case "wda-home":
             performWDAAction(
                 path: "/wda/homescreen",
@@ -182,49 +178,6 @@ final class LocalControlBridge {
             group.leave()
         }
 
-        group.notify(queue: callbackQueue) {
-            completion(LocalControlResult(status: "ok", metadata: metadata))
-        }
-    }
-
-    private func probePrivateHID(completion: @escaping (LocalControlResult) -> Void) {
-        PrivateHIDProbe.run { result in
-            completion(LocalControlResult(
-                status: result.dispatched ? "ok" : "error",
-                metadata: [
-                    "private_hid_symbols": result.symbols,
-                    "private_hid_client": result.client,
-                    "private_hid_dispatched": result.dispatched,
-                    "effect": result.dispatched ? "private-hid-probe-cleaned" : "none",
-                    "control_error": result.dispatched ? "none" : "private-hid-unavailable",
-                ]
-            ))
-        }
-    }
-
-    private func probeFixedTunnelServices(completion: @escaping (LocalControlResult) -> Void) {
-        let host = "fd8c:4a80:5d8d::1"
-        let endpoints: [(String, UInt16)] = [
-            ("tunnel_rsd", 51059),
-            ("tunnel_testmanager_automation", 54352),
-            ("tunnel_testmanager", 54359),
-            ("tunnel_appservice", 54321),
-        ]
-        let group = DispatchGroup()
-        let resultLock = NSLock()
-        var metadata: [String: Any] = [
-            "effect": "probe-only",
-            "control_error": "none",
-        ]
-        for (key, port) in endpoints {
-            group.enter()
-            probeTCP(host: host, port: port) { reachable in
-                resultLock.lock()
-                metadata[key] = reachable
-                resultLock.unlock()
-                group.leave()
-            }
-        }
         group.notify(queue: callbackQueue) {
             completion(LocalControlResult(status: "ok", metadata: metadata))
         }

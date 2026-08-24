@@ -12,14 +12,19 @@ settings:
     CODE_SIGNING_REQUIRED: NO
     CODE_SIGN_IDENTITY: ""
     PRODUCT_BUNDLE_IDENTIFIER: com.forwardinfinity.jarvisagent
-    MARKETING_VERSION: "0.18.0"
-    CURRENT_PROJECT_VERSION: "18"
+    MARKETING_VERSION: "0.19.0"
+    CURRENT_PROJECT_VERSION: "19"
 targets:
   JarvisAgent:
     type: application
     platform: iOS
     sources:
       - path: Sources
+        excludes:
+          # Retained only as bounded experiment evidence; never compile these
+          # failed private/relay paths into the production Agent.
+          - PrivateHIDProbe.swift
+          - RSDRelayManager.swift
     settings:
       base:
         PRODUCT_NAME: JarvisAgent
