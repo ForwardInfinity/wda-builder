@@ -40,16 +40,16 @@ git -C "$VENDOR" checkout --quiet --detach "$COMMIT"
 git -C "$VENDOR" apply --unidiff-zero --check "$PATCH"
 git -C "$VENDOR" apply --unidiff-zero "$PATCH"
 git -C "$VENDOR" diff --check
-mapfile -t changed < <(git -C "$VENDOR" diff --name-only | sort)
-expected=(
-  'idevice/Cargo.toml'
-  'idevice/src/remote_pairing/mod.rs'
-  'idevice/src/remote_pairing/rp_pairing_file.rs'
-  'idevice/src/remote_pairing/tlv.rs'
-  'idevice/src/remote_pairing/tunnel.rs'
-)
-[[ "${changed[*]}" == "${expected[*]}" ]] \
-  || { printf 'unexpected patched files: %s\n' "${changed[*]}" >&2; exit 3; }
+changed="$(git -C "$VENDOR" diff --name-only | sort)"
+expected="$(printf '%s\n' \
+  'idevice/Cargo.toml' \
+  'idevice/src/remote_pairing/mod.rs' \
+  'idevice/src/remote_pairing/rp_pairing_file.rs' \
+  'idevice/src/remote_pairing/tlv.rs' \
+  'idevice/src/remote_pairing/tunnel.rs' \
+  | sort)"
+[[ "$changed" == "$expected" ]] \
+  || { printf 'unexpected patched files:\n%s\n' "$changed" >&2; exit 3; }
 
 cat > "$MARKER" <<EOF
 commit=$COMMIT
