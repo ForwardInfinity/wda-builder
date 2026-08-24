@@ -1,6 +1,7 @@
 import BackgroundTasks
 import Combine
 import Foundation
+import JarvisRSDProbeFFI
 
 /// User-visible execution grant for the fixed on-device XCTest controller.
 ///
