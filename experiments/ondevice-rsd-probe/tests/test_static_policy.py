@@ -29,6 +29,8 @@ class StaticPolicyTests(unittest.TestCase):
     def test_dependency_is_pinned_and_patch_matches(self):
         manifest = (ROOT / "DEPENDENCIES.lock").read_text()
         self.assertIn("63a341d7f624b5c1f2540e4cecb269151a2caf52", manifest)
+        cargo = (ROOT / "rust/Cargo.toml").read_text()
+        self.assertIn("lto = false", cargo)
         self.assertIn("ac08b6133eb024eb1a4f06cf25fdd598a79daa72", manifest)
         patch = ROOT / "patches/idevice-verify-only-privacy-and-bounds.patch"
         self.assertEqual(
