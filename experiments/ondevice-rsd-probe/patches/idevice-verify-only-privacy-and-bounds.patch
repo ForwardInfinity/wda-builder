@@ -1,0 +1,120 @@
+diff --git a/idevice/Cargo.toml b/idevice/Cargo.toml
+index 054c9a8..a378179 100644
+--- a/idevice/Cargo.toml
++++ b/idevice/Cargo.toml
+@@ -62,0 +63 @@ idevice-srp = { version = "0.6", optional = true }
++rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"], optional = true }
+@@ -220,2 +221 @@ remote_pairing = [
+-  "dep:idevice-srp",
+-  "dep:siphasher",
++  "dep:rand_core_06",
+@@ -227,0 +228,6 @@ remote_pairing = [
++]
++# Initial pair-setup is intentionally separable from pair-verify so narrow
++# consumers do not compile SRP/RSA setup code or expose a PIN path.
++remote_pairing_setup = [
++  "remote_pairing",
++  "dep:idevice-srp",
+@@ -228,0 +235 @@ remote_pairing = [
++  "dep:siphasher",
+@@ -294 +301 @@ full = [
+-  "remote_pairing",
++  "remote_pairing_setup",
+diff --git a/idevice/src/remote_pairing/mod.rs b/idevice/src/remote_pairing/mod.rs
+index cfa8ad2..abc6582 100644
+--- a/idevice/src/remote_pairing/mod.rs
++++ b/idevice/src/remote_pairing/mod.rs
+@@ -8 +8 @@ use chacha20poly1305::{
+-    ChaCha20Poly1305, Key, KeyInit, Nonce,
++    ChaCha20Poly1305, KeyInit, Nonce,
+@@ -11 +11 @@ use chacha20poly1305::{
+-use ed25519_dalek::Signature;
++use ed25519_dalek::{Signature, Signer};
+@@ -12,0 +13 @@ use hkdf::Hkdf;
++#[cfg(feature = "remote_pairing_setup")]
+@@ -15,0 +17 @@ use plist_macro::{PlistConvertible, PlistExt};
++#[cfg(feature = "remote_pairing_setup")]
+@@ -17 +19 @@ use rand::Rng as _;
+-use rsa::{rand_core::OsRng, signature::SignerMut};
++use rand_core_06::OsRng;
+@@ -18,0 +21 @@ use serde::Serialize;
++#[cfg(feature = "remote_pairing_setup")]
+@@ -23,0 +27 @@ pub mod errors;
++#[cfg(feature = "remote_pairing_setup")]
+@@ -24,0 +29 @@ mod opack;
++#[cfg(feature = "remote_pairing_setup")]
+@@ -25,0 +31 @@ mod peer_device;
++#[cfg(feature = "remote_pairing_setup")]
+@@ -33,0 +40 @@ pub mod tunnel;
++#[cfg(feature = "remote_pairing_setup")]
+@@ -34,0 +42 @@ pub use peer_device::{PeerDevice, compute_auth_tag};
++#[cfg(feature = "remote_pairing_setup")]
+@@ -57,0 +66 @@ pub struct RemotePairingClient<R: RpPairingSocketProvider> {
++    #[cfg(feature = "remote_pairing_setup")]
+@@ -75,0 +85 @@ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
++            #[cfg(feature = "remote_pairing_setup")]
+@@ -110 +120,2 @@ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
+-        if self.validate_pairing(pairing_file).await.is_err() {
++        if let Err(error) = self.validate_pairing(pairing_file).await {
++            #[cfg(feature = "remote_pairing_setup")]
+@@ -111,0 +123,5 @@ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
++            #[cfg(not(feature = "remote_pairing_setup"))]
++            {
++                let _ = pin_callback;
++                return Err(error);
++            }
+@@ -116,0 +133 @@ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
++    #[cfg(feature = "remote_pairing_setup")]
+@@ -353,0 +371 @@ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
++    #[cfg(feature = "remote_pairing_setup")]
+@@ -373,0 +392 @@ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
++    #[cfg(feature = "remote_pairing_setup")]
+@@ -490,0 +510 @@ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
++    #[cfg(feature = "remote_pairing_setup")]
+@@ -585,0 +606 @@ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
++    #[cfg(feature = "remote_pairing_setup")]
+@@ -655 +676 @@ impl<R: RpPairingSocketProvider> RemotePairingClient<R> {
+-        let key = Key::from_slice(&setup_encryption_key); // 32 bytes
++        let key = chacha20poly1305::Key::from_slice(&setup_encryption_key); // 32 bytes
+diff --git a/idevice/src/remote_pairing/rp_pairing_file.rs b/idevice/src/remote_pairing/rp_pairing_file.rs
+index 1ac87c4..57c2011 100644
+--- a/idevice/src/remote_pairing/rp_pairing_file.rs
++++ b/idevice/src/remote_pairing/rp_pairing_file.rs
+@@ -9 +9 @@ use plist_macro::plist_to_xml_bytes;
+-use rsa::rand_core::OsRng;
++use rand_core_06::OsRng;
+@@ -11 +11 @@ use serde::de::Error;
+-use tracing::{debug, warn};
++use tracing::warn;
+@@ -59,0 +60 @@ impl RpPairingFile {
++    #[cfg(feature = "remote_pairing_setup")]
+@@ -90,0 +92,2 @@ impl RpPairingFile {
++        // This dictionary contains the private pairing key. Never emit it via
++        // tracing, even at debug level.
+@@ -92 +94,0 @@ impl RpPairingFile {
+-        debug!("Read dictionary for rppairingfile: {p:#?}");
+diff --git a/idevice/src/remote_pairing/tlv.rs b/idevice/src/remote_pairing/tlv.rs
+index 46412de..2950c56 100644
+--- a/idevice/src/remote_pairing/tlv.rs
++++ b/idevice/src/remote_pairing/tlv.rs
+@@ -47,0 +48 @@ pub struct TLV8Entry {
++#[cfg(feature = "remote_pairing_setup")]
+@@ -60,0 +62 @@ pub fn collect_component_data(
++#[cfg(feature = "remote_pairing_setup")]
+diff --git a/idevice/src/remote_pairing/tunnel.rs b/idevice/src/remote_pairing/tunnel.rs
+index b66be37..27e17f9 100644
+--- a/idevice/src/remote_pairing/tunnel.rs
++++ b/idevice/src/remote_pairing/tunnel.rs
+@@ -62 +62,11 @@ pub async fn connect_tls_psk_tunnel_native<S: ReadWrite>(
+-    let response_body = &response_data[body_start..body_start + body_len];
++    let Some(body_end) = body_start.checked_add(body_len) else {
++        return Err(IdeviceError::UnexpectedResponse(
++            "CDTunnel handshake response length overflow".into(),
++        ));
++    };
++    if response_data.len() < body_end {
++        return Err(IdeviceError::UnexpectedResponse(
++            "CDTunnel handshake response body truncated".into(),
++        ));
++    }
++    let response_body = &response_data[body_start..body_end];

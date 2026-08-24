@@ -1,0 +1,14 @@
+# Human-readable source pin manifest. Cargo transitive pins live in rust/Cargo.lock.
+
+[idevice]
+repository = "https://github.com/jkcoxson/idevice.git"
+commit = "63a341d7f624b5c1f2540e4cecb269151a2caf52"
+tree = "ac08b6133eb024eb1a4f06cf25fdd598a79daa72"
+license = "MIT"
+patch = "patches/idevice-verify-only-privacy-and-bounds.patch"
+patch_sha256 = "1ace175b8d25dc12061874fbea6930fdf5006309f6a36eb3aded9edf14201340"
+
+[localdevvpn_reference_only]
+repository = "https://github.com/seomin0610/LocalDevVPN.git"
+commit = "467a845f04a4b0936a7fc3dd0b326b49aaf98bdf"
+note = "Reference topology only. Its source or entitlement is not compiled into this probe."

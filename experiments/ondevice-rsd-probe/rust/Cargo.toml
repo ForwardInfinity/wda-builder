@@ -1,0 +1,26 @@
+[package]
+name = "jarvis-rsd-probe-ffi"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[lib]
+name = "jarvis_rsd_probe"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+idevice = { path = "../vendor/idevice/idevice", default-features = false, features = [
+  "remote_pairing",
+  "ring",
+  "rsd",
+  "tunnel_tcp_stack",
+] }
+tokio = { version = "1", features = ["net", "rt-multi-thread", "time"] }
+
+[profile.release]
+opt-level = "z"
+codegen-units = 1
+lto = "fat"
+panic = "abort"
+strip = "symbols"

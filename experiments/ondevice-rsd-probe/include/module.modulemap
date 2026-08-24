@@ -1,0 +1,4 @@
+module JarvisRSDProbeFFI [system] {
+  header "jarvis_rsd_probe.h"
+  export *
+}

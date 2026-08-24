@@ -1,0 +1,7 @@
+vendor/
+rust/target/
+ios/build/
+ios/*.xcodeproj/
+ios/Payload/
+ios/*.ipa
+.DS_Store

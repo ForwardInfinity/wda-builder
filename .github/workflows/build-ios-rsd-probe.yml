@@ -1,0 +1,74 @@
+name: Build experimental on-device RSD probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Checkout builder
+        uses: actions/checkout@v4
+
+      - name: Setup pinned toolchains
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup default 1.98.0
+          rustup component add clippy
+          rustup target add aarch64-apple-ios
+          if ! command -v xcodegen >/dev/null; then
+            brew install xcodegen
+          fi
+          xcodebuild -version
+          rustc --version
+          cargo --version
+          xcodegen --version
+
+      - name: Static fail-closed policy tests
+        env:
+          JARVIS_SKIP_V19_BASELINE: "1"
+        run: |
+          set -euo pipefail
+          python3 experiments/ondevice-rsd-probe/tests/test_static_policy.py
+          ! grep -R -E 'Bearer [A-Za-z0-9_-]{20,}|ntfy-topic|jarvis/passcode' \
+            experiments/ondevice-rsd-probe
+
+      - name: RustSec dependency audit
+        run: |
+          set -euo pipefail
+          experiments/ondevice-rsd-probe/scripts/prepare_vendor.sh
+          cargo install cargo-audit --version 0.22.2 --locked
+          (cd experiments/ondevice-rsd-probe/rust && cargo audit --deny warnings)
+
+      - name: Build and package unsigned probe
+        run: |
+          set -euo pipefail
+          experiments/ondevice-rsd-probe/scripts/build_macos.sh
+
+      - name: Record dependency and artifact manifest
+        run: |
+          set -euo pipefail
+          ROOT=experiments/ondevice-rsd-probe
+          {
+            printf 'idevice_commit='; git -C "$ROOT/vendor/idevice" rev-parse HEAD
+            printf 'idevice_tree='; git -C "$ROOT/vendor/idevice" rev-parse 'HEAD^{tree}'
+            printf 'cargo_lock_sha256='; shasum -a 256 "$ROOT/rust/Cargo.lock" | awk '{print $1}'
+            printf 'ipa_sha256='; shasum -a 256 "$ROOT/ios/JarvisRSDProbe-unsigned-v1.ipa" | awk '{print $1}'
+          } > "$ROOT/ios/JarvisRSDProbe-build-manifest.txt"
+          cat "$ROOT/ios/JarvisRSDProbe-build-manifest.txt"
+
+      - name: Upload unsigned experimental artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: JarvisRSDProbe-unsigned-v1
+          path: |
+            experiments/ondevice-rsd-probe/ios/JarvisRSDProbe-unsigned-v1.ipa
+            experiments/ondevice-rsd-probe/ios/JarvisRSDProbe-build-manifest.txt
+            experiments/ondevice-rsd-probe/rust/Cargo.lock
+          retention-days: 7
+          if-no-files-found: error
