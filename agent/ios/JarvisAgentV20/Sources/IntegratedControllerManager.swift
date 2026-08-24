@@ -13,9 +13,14 @@ final class IntegratedControllerManager: ObservableObject {
 
     private let worker = DispatchQueue(label: "com.forwardinfinity.jarvisagent.integrated-controller")
     private let localNetworkQueue = DispatchQueue(label: "com.forwardinfinity.jarvisagent.integrated-controller.local-network")
+    private let healthQueue = DispatchQueue(label: "com.forwardinfinity.jarvisagent.integrated-controller.health")
+    private let maximumRecoveryAttempts = 3
     private var localNetworkConnection: NWConnection?
     private var localNetworkTimeout: DispatchWorkItem?
+    private var healthTimer: DispatchSourceTimer?
     private var armedForRecovery = false
+    private var heldSessionActive = false
+    private var recoveryAttempts = 0
 
     @Published private(set) var pairingPresent = ControllerPairingRecordStore.isPresent
     @Published private(set) var busy = false
@@ -150,6 +155,7 @@ final class IntegratedControllerManager: ObservableObject {
             return
         }
         armedForRecovery = true
+        recoveryAttempts = 0
         status = "Waiting for the visible iOS execution grant"
         stage = "Continued processing"
         if ContinuedRecoveryManager.shared.active {
@@ -182,29 +188,40 @@ final class IntegratedControllerManager: ObservableObject {
         stage = "RSD adapter"
 
         worker.async { [weak self] in
-            guard var bytes = ControllerPairingRecordStore.read() else {
-                DispatchQueue.main.async { self?.fail("Controller blocked: pairing record unreadable") }
-                return
-            }
+            guard let self else { return }
+            var bytes = Data()
             defer {
                 if !bytes.isEmpty { bytes.resetBytes(in: 0..<bytes.count) }
             }
-            var held = Self.emptyRsdResult()
-            let heldCode: Int32 = bytes.withUnsafeBytes { raw in
-                jarvis_rsd_hold_start(
-                    raw.bindMemory(to: UInt8.self).baseAddress,
-                    raw.count,
-                    &held
-                )
-            }
-            guard heldCode == 0,
-                  held.abi_version == 1,
-                  held.stage == UInt32(JARVIS_RSD_STAGE_COMPLETE) else {
-                _ = jarvis_rsd_hold_stop()
-                DispatchQueue.main.async {
-                    self?.fail("Integrated RSD failed closed — code \(held.error_code)/\(held.error_subcode)")
+            if !self.heldSessionActive {
+                guard let loaded = ControllerPairingRecordStore.read() else {
+                    DispatchQueue.main.async {
+                        self.scheduleRecovery(reason: "Controller blocked: pairing record unreadable")
+                    }
+                    return
                 }
-                return
+                bytes = loaded
+                var held = Self.emptyRsdResult()
+                let heldCode: Int32 = bytes.withUnsafeBytes { raw in
+                    jarvis_rsd_hold_start(
+                        raw.bindMemory(to: UInt8.self).baseAddress,
+                        raw.count,
+                        &held
+                    )
+                }
+                guard heldCode == 0,
+                      held.abi_version == 1,
+                      held.stage == UInt32(JARVIS_RSD_STAGE_COMPLETE) else {
+                    self.heldSessionActive = false
+                    _ = jarvis_rsd_hold_stop()
+                    DispatchQueue.main.async {
+                        self.scheduleRecovery(
+                            reason: "Integrated RSD failed closed — code \(held.error_code)/\(held.error_subcode)"
+                        )
+                    }
+                    return
+                }
+                self.heldSessionActive = true
             }
 
             var controller = Self.emptyDtxResult()
@@ -214,15 +231,17 @@ final class IntegratedControllerManager: ObservableObject {
                   controller.stage == UInt32(JARVIS_RSD_STAGE_CONTROLLER_ACTIVE),
                   controller.channel_mask & UInt32(JARVIS_FIXED_WDA_CONTROLLER_ACTIVE) != 0 else {
                 _ = jarvis_rsd_fixed_wda_stop()
-                _ = jarvis_rsd_hold_stop()
+                // The FFI drops the held adapter on controller-start failure.
+                self.heldSessionActive = false
                 DispatchQueue.main.async {
-                    self?.fail("Integrated controller failed closed — code \(controller.error_code)/\(controller.error_subcode)")
+                    self.scheduleRecovery(
+                        reason: "Integrated controller failed closed — code \(controller.error_code)/\(controller.error_subcode)"
+                    )
                 }
                 return
             }
 
             DispatchQueue.main.async {
-                guard let self else { return }
                 self.controllerActive = true
                 self.stage = "Local controller active"
                 self.status = "Integrated controller active — waiting for loopback WDA"
@@ -234,8 +253,9 @@ final class IntegratedControllerManager: ObservableObject {
                     if ready {
                         self.status = "INTEGRATED JARVIS CONTROLLER + WDA PASS"
                         self.stage = "WDA ready"
+                        self.startHealthMonitor()
                     } else {
-                        self.stopFailClosed(reason: "WDA readiness failed closed")
+                        self.scheduleRecovery(reason: "WDA readiness failed closed")
                     }
                 }
             }
@@ -251,15 +271,17 @@ final class IntegratedControllerManager: ObservableObject {
             status = "Integrated local controller is active"
             stage = "Local controller active"
         } else {
-            stopFailClosed(reason: "Integrated controller is not active")
+            scheduleRecovery(reason: "Integrated controller is not active")
         }
     }
 
     func stopFromUserAction() {
         guard !busy else { return }
         armedForRecovery = false
+        stopHealthMonitor()
         _ = jarvis_rsd_fixed_wda_stop()
         _ = jarvis_rsd_hold_stop()
+        heldSessionActive = false
         controllerActive = false
         wdaReady = false
         status = "Integrated controller stopped"
@@ -268,8 +290,10 @@ final class IntegratedControllerManager: ObservableObject {
 
     func stopForRecoveryExpiration() {
         armedForRecovery = false
+        stopHealthMonitor()
         _ = jarvis_rsd_fixed_wda_stop()
         _ = jarvis_rsd_hold_stop()
+        heldSessionActive = false
         DispatchQueue.main.async {
             self.busy = false
             self.controllerActive = false
@@ -279,24 +303,62 @@ final class IntegratedControllerManager: ObservableObject {
         }
     }
 
-    private func stopFailClosed(reason: String) {
-        armedForRecovery = false
+    private func scheduleRecovery(reason: String) {
+        stopHealthMonitor()
+        // Preserve the already-authenticated userspace adapter so a warm
+        // Cellular retry never depends on fresh fake-peer pair-verify.
         _ = jarvis_rsd_fixed_wda_stop()
-        _ = jarvis_rsd_hold_stop()
         busy = false
         controllerActive = false
         wdaReady = false
-        status = reason
-        stage = "Stopped fail-closed"
+        guard armedForRecovery,
+              ContinuedRecoveryManager.shared.active,
+              recoveryAttempts < maximumRecoveryAttempts else {
+            armedForRecovery = false
+            _ = jarvis_rsd_hold_stop()
+            heldSessionActive = false
+            status = reason
+            stage = "Stopped fail-closed"
+            return
+        }
+        recoveryAttempts += 1
+        status = "\(reason) — bounded retry \(recoveryAttempts)/\(maximumRecoveryAttempts)"
+        stage = "Controller recovery"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            guard let self,
+                  self.armedForRecovery,
+                  ContinuedRecoveryManager.shared.active,
+                  !self.busy,
+                  !self.controllerActive else { return }
+            self.startControllerAfterExecutionGrant()
+        }
     }
 
-    private func fail(_ message: String) {
-        armedForRecovery = false
-        busy = false
-        controllerActive = false
-        wdaReady = false
-        status = message
-        stage = "Stopped fail-closed"
+    private func startHealthMonitor() {
+        stopHealthMonitor()
+        let timer = DispatchSource.makeTimerSource(queue: healthQueue)
+        timer.schedule(deadline: .now() + 5, repeating: .seconds(5), leeway: .seconds(1))
+        timer.setEventHandler { [weak self] in
+            DispatchQueue.main.async {
+                self?.verifyControllerHealth()
+            }
+        }
+        healthTimer = timer
+        timer.resume()
+    }
+
+    private func stopHealthMonitor() {
+        healthTimer?.cancel()
+        healthTimer = nil
+    }
+
+    private func verifyControllerHealth() {
+        guard armedForRecovery, controllerActive, !busy else { return }
+        var result = Self.emptyDtxResult()
+        guard jarvis_rsd_fixed_wda_check(&result) == 0 else {
+            scheduleRecovery(reason: "Controller transport ended")
+            return
+        }
     }
 
     private func finishLocalNetworkRequest(_ message: String, connection: NWConnection) {

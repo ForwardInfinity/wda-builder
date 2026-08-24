@@ -36,7 +36,7 @@ class V20PolicyTests(unittest.TestCase):
             "wda-keyboard-probe",
             "secure-unlock",
         ])
-        self.assertIn('ios-standalone-20-integrated-controller', AGENT)
+        self.assertIn('ios-standalone-20r2-integrated-controller', AGENT)
 
     def test_pairing_authority_is_device_only(self):
         self.assertIn("AfterFirstUnlockThisDeviceOnly", SOURCES)
@@ -50,6 +50,12 @@ class V20PolicyTests(unittest.TestCase):
         self.assertEqual(SOURCES.count("BGContinuedProcessingTaskRequest("), 1)
         self.assertIn("One visible 48-hour iOS Continued Processing task owns both", SOURCES)
         self.assertIn("IntegratedControllerManager.shared.stopForRecoveryExpiration()", SOURCES)
+        self.assertIn("private let maximumRecoveryAttempts = 3", INTEGRATED)
+        self.assertIn("Controller transport ended", INTEGRATED)
+        self.assertIn("timer.schedule(deadline: .now() + 5, repeating: .seconds(5)", INTEGRATED)
+        self.assertEqual(INTEGRATED.count("bounded retry"), 1)
+        self.assertIn("Cellular retry never depends on fresh fake-peer pair-verify", INTEGRATED)
+        self.assertIn("if !self.heldSessionActive", INTEGRATED)
         self.assertIn("com.forwardinfinity.jarvisagent.recovery.*", INFO)
         self.assertNotIn("jarvisrsdprobe.controller", INFO + SOURCES)
 
