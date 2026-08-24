@@ -155,7 +155,7 @@ class StaticPolicyTests(unittest.TestCase):
         self.assertIn("Probe two fixed proxy channels", SWIFT)
         self.assertIn("sends no XCTest session-init", SWIFT)
         self.assertEqual(SWIFT.count('URL(string: "http://127.0.0.1:8100/status")'), 1)
-        self.assertIn("Start fixed local controller + WDA", SWIFT)
+        self.assertIn("Start protected local controller + WDA", SWIFT)
         self.assertIn("real iOS system prompt directly on-device", SWIFT)
         self.assertIn("NSAllowsLocalNetworking", INFO)
         self.assertNotIn("launch_runner", RUST + SWIFT + HEADER)
@@ -163,11 +163,25 @@ class StaticPolicyTests(unittest.TestCase):
         self.assertEqual(SWIFT.count("bootstrap.mobiledevicepairing"), 2)
         self.assertIn("removeStagedRecord", SWIFT)
 
-    def test_no_background_mode_or_production_bundle_collision(self):
+    def test_only_user_visible_continued_processing_is_present(self):
         self.assertNotIn("UIBackgroundModes", INFO)
         self.assertIn("com.forwardinfinity.jarvisrsdprobe", PROJECT)
         self.assertNotIn("com.forwardinfinity.jarvisagent\n", PROJECT)
-        self.assertNotIn("BGTaskScheduler", SWIFT + INFO)
+        self.assertEqual(
+            INFO.count("com.forwardinfinity.jarvisrsdprobe.controller.*"),
+            1,
+        )
+        self.assertEqual(SWIFT.count("BGContinuedProcessingTaskRequest("), 1)
+        self.assertEqual(SWIFT.count("startFromUserAction()"), 2)
+        self.assertIn("visible iOS 48-hour continued-processing grant", SWIFT)
+        self.assertIn("Cold restore rejected — controller handles absent", SWIFT)
+        for forbidden in (
+            "BGAppRefreshTask",
+            "BGProcessingTaskRequest",
+            "URLSessionConfiguration.background",
+            "beginBackgroundTask",
+        ):
+            self.assertNotIn(forbidden, SWIFT)
 
     def test_no_pairing_material_is_committed(self):
         allowed_plists = {ROOT / "ios/Sources/Info.plist"}

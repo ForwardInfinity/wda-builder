@@ -69,6 +69,12 @@ if /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$APP/Info.plist" >/dev
   echo 'experimental probe must not declare background modes' >&2
   exit 3
 fi
+/usr/libexec/PlistBuddy -c 'Print :BGTaskSchedulerPermittedIdentifiers:0' "$APP/Info.plist" \
+  | grep -qx 'com.forwardinfinity.jarvisrsdprobe.controller.*'
+if /usr/libexec/PlistBuddy -c 'Print :BGTaskSchedulerPermittedIdentifiers:1' "$APP/Info.plist" >/dev/null 2>&1; then
+  echo 'experimental probe has an unexpected background-task identifier' >&2
+  exit 3
+fi
 strings "$BIN" > /tmp/jarvis-rsd-probe-app.strings
 grep -q '10.7.0.1' /tmp/jarvis-rsd-probe-app.strings
 grep -q 'RSD TRANSPORT PASS' /tmp/jarvis-rsd-probe-app.strings
@@ -87,6 +93,9 @@ grep -q 'dtxproxy:XCTestManager_IDEInterface:XCTestDriverInterface' /tmp/jarvis-
 grep -q 'launchSuspendedProcessWithDevicePath:bundleIdentifier:environment:arguments:options:' /tmp/jarvis-rsd-probe-app.strings
 grep -q 'http://127.0.0.1:8100/status' /tmp/jarvis-rsd-probe-app.strings
 grep -q 'LOCAL CONTROLLER + WDA PASS' /tmp/jarvis-rsd-probe-app.strings
+grep -q 'BGContinuedProcessingTaskRequest' /tmp/jarvis-rsd-probe-app.strings
+grep -q 'Jarvis local XCTest controller' /tmp/jarvis-rsd-probe-app.strings
+grep -q 'Cold restore rejected' /tmp/jarvis-rsd-probe-app.strings
 for forbidden in \
   'setupManualPairing' \
   'workbox.tailfd8ac6.ts.net' \
@@ -105,7 +114,7 @@ for forbidden in \
 done
 
 cat > "$APP/JarvisRSDProbeBuild.json" <<'JSON'
-{"experiment":"ondevice-fixed-xctest-wda-controller","version":4,"endpoint":"10.7.0.1:49152","side_effects":"fixed-runner-bootstrap-only"}
+{"experiment":"ondevice-fixed-xctest-wda-controller","version":5,"endpoint":"10.7.0.1:49152","side_effects":"fixed-runner-plus-visible-continued-processing"}
 JSON
 (
   cd "$IOS"

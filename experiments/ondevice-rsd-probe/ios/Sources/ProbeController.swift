@@ -439,8 +439,13 @@ final class ProbeController: ObservableObject {
             stage = "Input"
             return
         }
+        guard ContinuedControllerManager.shared.startFromUserAction() else {
+            status = "Controller bootstrap blocked: visible continued processing was rejected"
+            stage = "Continued processing"
+            return
+        }
         isBusy = true
-        status = "Starting fixed local XCTest controller and WDA runner"
+        status = "Starting protected fixed local XCTest controller and WDA runner"
         stage = "Controller starting"
         clearControllerResult()
         startControllerProgressTimer()
@@ -467,14 +472,15 @@ final class ProbeController: ObservableObject {
                             self.status = "LOCAL CONTROLLER + WDA PASS — fixed loopback status ready"
                             self.stage = "WDA ready"
                         } else {
-                            _ = jarvis_rsd_hold_stop()
+                            ContinuedControllerManager.shared.stopAfterControllerFailure()
                             self.hasHeldSession = false
                             self.fixedControllerActive = false
-                            self.status = "WDA readiness failed closed; controller and held adapter stopped"
+                            self.status = "WDA readiness failed closed; protected controller and held adapter stopped"
                             self.stage = "WDA loopback"
                         }
                     }
                 } else {
+                    ContinuedControllerManager.shared.stopAfterControllerFailure()
                     self.isBusy = false
                     self.hasHeldSession = false
                     self.fixedControllerActive = false
@@ -490,16 +496,21 @@ final class ProbeController: ObservableObject {
         let returnCode = jarvis_rsd_fixed_wda_check(&result)
         fixedControllerActive = returnCode == 0
         stage = Self.stageName(result.stage)
-        status = fixedControllerActive
-            ? "Fixed local XCTest controller is active"
-            : "Fixed local XCTest controller is not active"
+        if fixedControllerActive {
+            status = "Fixed local XCTest controller is active"
+        } else {
+            ContinuedControllerManager.shared.stopAfterControllerFailure()
+            hasHeldSession = false
+            status = "Fixed local XCTest controller is not active; protection stopped fail-closed"
+        }
     }
 
     func stopFixedWDAController() {
         guard !isBusy else { return }
-        _ = jarvis_rsd_fixed_wda_stop()
+        ContinuedControllerManager.shared.stopFromUserAction()
+        hasHeldSession = false
         clearControllerResult()
-        status = "Fixed local XCTest controller stopped"
+        status = "Protected fixed local XCTest controller stopped"
         stage = "Controller stopped"
     }
 

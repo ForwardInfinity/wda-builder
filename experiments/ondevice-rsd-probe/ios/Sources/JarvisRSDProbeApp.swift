@@ -1,8 +1,21 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
+
+final class ProbeAppDelegate: NSObject, UIApplicationDelegate {
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        ContinuedControllerManager.shared.registerPendingTask()
+        return true
+    }
+}
 
 @main
 struct JarvisRSDProbeApp: App {
+    @UIApplicationDelegateAdaptor(ProbeAppDelegate.self) private var appDelegate
+
     var body: some Scene {
         WindowGroup {
             ProbeView()
@@ -12,6 +25,7 @@ struct JarvisRSDProbeApp: App {
 
 private struct ProbeView: View {
     @StateObject private var controller = ProbeController()
+    @StateObject private var continuedController = ContinuedControllerManager.shared
     @State private var showingImporter = false
 
     private static let pairingTypes: [UTType] = [
@@ -25,7 +39,7 @@ private struct ProbeView: View {
         NavigationStack {
             List {
                 Section("Safety boundary") {
-                    Label("Read-only foreground experiment", systemImage: "checkmark.shield")
+                    Label("User-initiated, visible fixed-controller experiment", systemImage: "checkmark.shield")
                     Text("Fixed endpoint: LocalDevVPN fake peer 10.7.0.1:49152")
                         .font(.footnote.monospaced())
                     Text("Fixed on-device XCTest/WDA bootstrap is compiled with no caller-selected destination, bundle, selector, payload, HID, passcode, or VPS command channel. Pair-setup and relay remain absent.")
@@ -89,7 +103,7 @@ private struct ProbeView: View {
                         "Held adapter",
                         value: controller.hasHeldSession ? "Active" : "None"
                     )
-                    Text("This is not cold recoverability. It only tests whether an already-established userspace RSD adapter survives Wi-Fi to Cellular while this foreground app process remains alive. The hold expires after ten minutes.")
+                    Text("This is not cold recoverability. It only tests whether an already-established userspace RSD adapter survives Wi-Fi to Cellular while this app process remains alive. New controller starts require a hold younger than ten minutes.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Button {
@@ -109,7 +123,9 @@ private struct ProbeView: View {
                     Button("Stop held RSD session", role: .destructive) {
                         controller.stopHeldReadOnlySession()
                     }
-                    .disabled(controller.isBusy || !controller.hasHeldSession)
+                    .disabled(
+                        controller.isBusy || !controller.hasHeldSession || controller.fixedControllerActive
+                    )
                 }
 
                 Section("Gate 2 — fixed DTX transports") {
@@ -167,16 +183,20 @@ private struct ProbeView: View {
                 }
 
                 Section("Accelerated E2E — fixed local controller") {
-                    Text("One fixed action initializes XCTest, launches only the preinstalled fixed WDA runner, performs the XCTest authorization request, starts its test plan, and checks only http://127.0.0.1:8100/status. If a real iOS authorization prompt appears, enter it directly on-device; no authorization secret is read or stored by this app.")
+                    Text("One fixed action starts a visible iOS 48-hour continued-processing grant, initializes XCTest, launches only the preinstalled fixed WDA runner, performs the XCTest authorization request, starts its test plan, and checks only http://127.0.0.1:8100/status. If a real iOS authorization prompt appears, enter it directly on-device; no authorization secret is read or stored by this app.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Button {
                         controller.runFixedWDAController()
                     } label: {
-                        Label("Start fixed local controller + WDA", systemImage: "bolt.shield")
+                        Label("Start protected local controller + WDA", systemImage: "bolt.shield")
                     }
                     .disabled(
                         controller.isBusy || !controller.hasHeldSession || controller.fixedControllerActive
+                    )
+                    LabeledContent(
+                        "Continued processing",
+                        value: continuedController.status
                     )
                     HStack {
                         Text("Local XCTest controller")
@@ -194,10 +214,13 @@ private struct ProbeView: View {
                         controller.checkFixedWDAController()
                     }
                     .disabled(controller.isBusy || !controller.fixedControllerActive)
-                    Button("Stop local controller", role: .destructive) {
+                    Button("Stop protected local controller", role: .destructive) {
                         controller.stopFixedWDAController()
                     }
-                    .disabled(controller.isBusy || !controller.fixedControllerActive)
+                    .disabled(
+                        controller.isBusy
+                            || (!controller.fixedControllerActive && !continuedController.active)
+                    )
                 }
 
                 Section("Sanitized result") {
