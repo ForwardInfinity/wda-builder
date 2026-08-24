@@ -24,9 +24,6 @@ targets:
     platform: iOS
     sources:
       - path: Sources
-        excludes:
-          - PrivateHIDProbe.swift
-          - RSDRelayManager.swift
     settings:
       base:
         PRODUCT_NAME: JarvisAgent

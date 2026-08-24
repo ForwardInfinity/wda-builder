@@ -57,8 +57,8 @@ class V20PolicyTests(unittest.TestCase):
         self.assertIn("com.forwardinfinity.jarvisagent", PROJECT)
         self.assertIn("IPHONEOS_DEPLOYMENT_TARGET: \"26.0\"", PROJECT)
         self.assertIn("-ljarvis_rsd_probe", PROJECT)
-        self.assertIn("PrivateHIDProbe.swift", PROJECT)
-        self.assertIn("RSDRelayManager.swift", PROJECT)
+        self.assertFalse((V20 / "Sources/PrivateHIDProbe.swift").exists())
+        self.assertFalse((V20 / "Sources/RSDRelayManager.swift").exists())
         for forbidden in (
             "start-rsd-relay",
             "probe-private-hid",
