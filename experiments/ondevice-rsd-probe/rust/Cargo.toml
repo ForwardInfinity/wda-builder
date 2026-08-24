@@ -25,4 +25,5 @@ codegen-units = 1
 # newer upstream LLVM. Final app dead-stripping remains enabled in Xcode.
 lto = false
 panic = "abort"
-strip = "symbols"
+# Preserve the two C ABI exports in the archive; Xcode strips the final app.
+strip = "debuginfo"

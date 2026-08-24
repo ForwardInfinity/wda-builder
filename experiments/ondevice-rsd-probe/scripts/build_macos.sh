@@ -30,9 +30,10 @@ rustup component add clippy
 )
 
 test -s "$LIB"
-nm -gU "$LIB" > /tmp/jarvis-rsd-probe-lib-symbols.txt
-grep -q '_jarvis_rsd_pairing_record_is_valid$' /tmp/jarvis-rsd-probe-lib-symbols.txt
-grep -q '_jarvis_rsd_probe$' /tmp/jarvis-rsd-probe-lib-symbols.txt
+# Do not run Apple's `nm` across the Rust archive: prebuilt Rust std objects
+# carry newer LLVM metadata that old Apple symbol readers reject. The Xcode
+# link below is the authoritative ABI check because both C exports are called
+# by Swift and unresolved symbols fail the build.
 
 (
   cd "$IOS"
