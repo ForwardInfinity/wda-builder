@@ -24,6 +24,7 @@ enum {
 enum {
     JARVIS_XCTESTMANAGER_PROXY_CONTROL = 1u << 0,
     JARVIS_XCTESTMANAGER_PROXY_MAIN = 1u << 1,
+    JARVIS_FIXED_WDA_CONTROLLER_ACTIVE = 1u << 0,
 };
 
 enum {
@@ -57,6 +58,20 @@ enum {
     JARVIS_RSD_STAGE_PROXY_TESTMANAGER_CTRL_CHANNEL = 36,
     JARVIS_RSD_STAGE_PROXY_TESTMANAGER_MAIN_CHANNEL = 37,
     JARVIS_RSD_STAGE_PROXY_COMPLETE = 38,
+    JARVIS_RSD_STAGE_CONTROLLER_RSD_TCP = 40,
+    JARVIS_RSD_STAGE_CONTROLLER_RSD_HANDSHAKE = 41,
+    JARVIS_RSD_STAGE_CONTROLLER_INSTALLATION_PROXY = 42,
+    JARVIS_RSD_STAGE_CONTROLLER_RUNNER_LOOKUP = 43,
+    JARVIS_RSD_STAGE_CONTROLLER_DTSERVICEHUB = 44,
+    JARVIS_RSD_STAGE_CONTROLLER_TESTMANAGER_CTRL = 45,
+    JARVIS_RSD_STAGE_CONTROLLER_TESTMANAGER_MAIN = 46,
+    JARVIS_RSD_STAGE_CONTROLLER_PROXY_CHANNELS = 47,
+    JARVIS_RSD_STAGE_CONTROLLER_SESSION_INIT = 48,
+    JARVIS_RSD_STAGE_CONTROLLER_RUNNER_LAUNCH = 49,
+    JARVIS_RSD_STAGE_CONTROLLER_RUNNER_AUTHORIZATION = 50,
+    JARVIS_RSD_STAGE_CONTROLLER_DRIVER_CHANNEL = 51,
+    JARVIS_RSD_STAGE_CONTROLLER_START_TEST_PLAN = 52,
+    JARVIS_RSD_STAGE_CONTROLLER_ACTIVE = 53,
 };
 
 typedef struct JarvisRsdProbeResult {
@@ -102,7 +117,19 @@ int32_t jarvis_rsd_hold_dtx_probe(JarvisDtxProbeResult *output);
 /** Open and close exactly two fixed XCTestManager proxy channels. */
 int32_t jarvis_rsd_hold_xctestmanager_proxy_probe(JarvisDtxProbeResult *output);
 
-/** Drop the retained adapter. Returns 1 if one existed, else 0. */
+/** Start the fixed on-device XCTest controller and WDA runner. */
+int32_t jarvis_rsd_hold_fixed_wda_start(JarvisDtxProbeResult *output);
+
+/** Return the current sanitized controller-bootstrap stage. */
+uint32_t jarvis_rsd_fixed_wda_progress(void);
+
+/** Check whether the fixed XCTest controller task is active. */
+int32_t jarvis_rsd_fixed_wda_check(JarvisDtxProbeResult *output);
+
+/** Abort the fixed XCTest controller task. */
+int32_t jarvis_rsd_fixed_wda_stop(void);
+
+/** Drop the retained adapter and fixed controller. */
 int32_t jarvis_rsd_hold_stop(void);
 
 #ifdef __cplusplus

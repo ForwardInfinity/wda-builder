@@ -16,6 +16,7 @@ idevice = { path = "../vendor/idevice/idevice", default-features = false, featur
   "ring",
   "rsd",
   "tunnel_tcp_stack",
+  "xctest",
 ] }
 tokio = { version = "1", features = ["net", "rt-multi-thread", "time"] }
 

@@ -9,7 +9,7 @@ PATCH="$ROOT/patches/idevice-verify-only-privacy-and-bounds.patch"
 REPOSITORY='https://github.com/jkcoxson/idevice.git'
 COMMIT='63a341d7f624b5c1f2540e4cecb269151a2caf52'
 TREE='ac08b6133eb024eb1a4f06cf25fdd598a79daa72'
-PATCH_SHA256='5974ff80668ccdddda705ee98002f6b0cb55bb22fbf2f95e838277e77cbbb425'
+PATCH_SHA256='ad5ce44440618e948f0eb403a21fe9146aba156a76269dd0e3e438639e4b78fc'
 MARKER="$VENDOR/.jarvis-patched"
 
 if [[ "${1:-}" == '--refresh' ]]; then
@@ -56,6 +56,7 @@ expected="$(printf '%s\n' \
   'idevice/src/services/mod.rs' \
   'idevice/src/services/dvt/mod.rs' \
   'idevice/src/services/dvt/fixed_channel_probe.rs' \
+  'idevice/src/services/dvt/xctest/mod.rs' \
   | sort)"
 [[ "$changed" == "$expected" ]] \
   || { printf 'unexpected patched files:\n%s\n' "$changed" >&2; exit 3; }

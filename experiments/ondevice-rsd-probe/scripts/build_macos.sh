@@ -78,6 +78,15 @@ grep -q 'does not open a DTX service channel' /tmp/jarvis-rsd-probe-app.strings
 grep -q 'dtxproxy:XCTestManager_IDEInterface:XCTestManager_DaemonConnectionInterface' /tmp/jarvis-rsd-probe-app.strings
 grep -q 'GATE 3 PROXY CHANNEL PASS' /tmp/jarvis-rsd-probe-app.strings
 grep -q 'sends no XCTest session-init' /tmp/jarvis-rsd-probe-app.strings
+grep -q 'com.ios-use.wda.00008101-00064d1a3a68001e' /tmp/jarvis-rsd-probe-app.strings
+grep -q '_IDE_initiateControlSessionWithCapabilities:' /tmp/jarvis-rsd-probe-app.strings
+grep -q '_IDE_initiateSessionWithIdentifier:capabilities:' /tmp/jarvis-rsd-probe-app.strings
+grep -q '_IDE_authorizeTestSessionWithProcessID:' /tmp/jarvis-rsd-probe-app.strings
+grep -q '_IDE_startExecutingTestPlanWithProtocolVersion:' /tmp/jarvis-rsd-probe-app.strings
+grep -q 'dtxproxy:XCTestManager_IDEInterface:XCTestDriverInterface' /tmp/jarvis-rsd-probe-app.strings
+grep -q 'launchSuspendedProcessWithDevicePath:bundleIdentifier:environment:arguments:options:' /tmp/jarvis-rsd-probe-app.strings
+grep -q 'http://127.0.0.1:8100/status' /tmp/jarvis-rsd-probe-app.strings
+grep -q 'LOCAL CONTROLLER + WDA PASS' /tmp/jarvis-rsd-probe-app.strings
 for forbidden in \
   'setupManualPairing' \
   '000000' \
@@ -87,14 +96,9 @@ for forbidden in \
   'performIoHidEvent' \
   'localhost:8100' \
   'start-rsd-relay' \
-  '_IDE_initiateControlSessionWithCapabilities:' \
-  '_IDE_initiateSessionWithIdentifier:capabilities:' \
-  '_IDE_authorizeTestSessionWithProcessID:' \
-  '_IDE_startExecutingTestPlanWithProtocolVersion:' \
-  'dtxproxy:XCTestManager_IDEInterface:XCTestDriverInterface' \
-  'launchSuspendedProcessWithDevicePath:bundleIdentifier:environment:arguments:options:' \
-  'WebDriverAgent' \
-  'XCTRunner'; do
+  'com.apple.coredevice.hid.indigo' \
+  'com.apple.instruments.server.services.hid' \
+  'refresh-stream'; do
   if grep -Fxq "$forbidden" /tmp/jarvis-rsd-probe-app.strings; then
     echo "forbidden binary string: $forbidden" >&2
     exit 3
@@ -102,7 +106,7 @@ for forbidden in \
 done
 
 cat > "$APP/JarvisRSDProbeBuild.json" <<'JSON'
-{"experiment":"ondevice-rsd-fixed-proxy-gate","version":3,"endpoint":"10.7.0.1:49152","side_effects":"fixed-proxy-open-close-only"}
+{"experiment":"ondevice-fixed-xctest-wda-controller","version":4,"endpoint":"10.7.0.1:49152","side_effects":"fixed-runner-bootstrap-only"}
 JSON
 (
   cd "$IOS"

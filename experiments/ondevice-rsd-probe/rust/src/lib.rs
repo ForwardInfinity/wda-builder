@@ -11,6 +11,7 @@ use std::future::Future;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::slice;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -22,6 +23,9 @@ use idevice::rsd::RsdHandshake;
 use idevice::services::dvt::fixed_channel_probe::{
     FixedDtxProbeStage, FixedProxyProbeStage, probe_fixed_testmanager_connections,
     probe_fixed_xctestmanager_proxy_channels,
+};
+use idevice::services::dvt::xctest::{
+    FixedOnDeviceWdaController, FixedOnDeviceWdaStage, start_fixed_ondevice_wda_controller,
 };
 use idevice::tcp::adapter::Adapter;
 use idevice::tcp::handle::AdapterHandle;
@@ -70,6 +74,20 @@ pub const STAGE_PROXY_TESTMANAGER_MAIN_HANDSHAKE: u32 = 35;
 pub const STAGE_PROXY_TESTMANAGER_CTRL_CHANNEL: u32 = 36;
 pub const STAGE_PROXY_TESTMANAGER_MAIN_CHANNEL: u32 = 37;
 pub const STAGE_PROXY_COMPLETE: u32 = 38;
+pub const STAGE_CONTROLLER_RSD_TCP: u32 = 40;
+pub const STAGE_CONTROLLER_RSD_HANDSHAKE: u32 = 41;
+pub const STAGE_CONTROLLER_INSTALLATION_PROXY: u32 = 42;
+pub const STAGE_CONTROLLER_RUNNER_LOOKUP: u32 = 43;
+pub const STAGE_CONTROLLER_DTSERVICEHUB: u32 = 44;
+pub const STAGE_CONTROLLER_TESTMANAGER_CTRL: u32 = 45;
+pub const STAGE_CONTROLLER_TESTMANAGER_MAIN: u32 = 46;
+pub const STAGE_CONTROLLER_PROXY_CHANNELS: u32 = 47;
+pub const STAGE_CONTROLLER_SESSION_INIT: u32 = 48;
+pub const STAGE_CONTROLLER_RUNNER_LAUNCH: u32 = 49;
+pub const STAGE_CONTROLLER_RUNNER_AUTHORIZATION: u32 = 50;
+pub const STAGE_CONTROLLER_DRIVER_CHANNEL: u32 = 51;
+pub const STAGE_CONTROLLER_START_TEST_PLAN: u32 = 52;
+pub const STAGE_CONTROLLER_ACTIVE: u32 = 53;
 
 const ERROR_INVALID_INPUT: i32 = -7_001;
 const ERROR_PAIRING_MISMATCH: i32 = -7_002;
@@ -151,6 +169,8 @@ struct HeldSession {
 static RUNTIME: OnceLock<Result<Runtime, ()>> = OnceLock::new();
 static PROBE_LOCK: Mutex<()> = Mutex::new(());
 static HELD_SESSION: Mutex<Option<HeldSession>> = Mutex::new(None);
+static FIXED_WDA_CONTROLLER: Mutex<Option<FixedOnDeviceWdaController>> = Mutex::new(None);
+static FIXED_WDA_PROGRESS: AtomicU32 = AtomicU32::new(0);
 
 fn runtime() -> Result<&'static Runtime, ProbeFailure> {
     RUNTIME
@@ -442,6 +462,102 @@ async fn probe_held_xctestmanager_proxy_channels() -> Result<JarvisDtxProbeResul
         error_code: 0,
         error_subcode: 0,
         channel_mask: result.channel_mask,
+    })
+}
+
+fn fixed_wda_progress_stage() -> u32 {
+    match FIXED_WDA_PROGRESS.load(Ordering::SeqCst) {
+        value if value == FixedOnDeviceWdaStage::InstallationProxy as u32 => {
+            STAGE_CONTROLLER_INSTALLATION_PROXY
+        }
+        value if value == FixedOnDeviceWdaStage::RunnerLookup as u32 => {
+            STAGE_CONTROLLER_RUNNER_LOOKUP
+        }
+        value if value == FixedOnDeviceWdaStage::DtServiceHub as u32 => {
+            STAGE_CONTROLLER_DTSERVICEHUB
+        }
+        value if value == FixedOnDeviceWdaStage::TestManagerControl as u32 => {
+            STAGE_CONTROLLER_TESTMANAGER_CTRL
+        }
+        value if value == FixedOnDeviceWdaStage::TestManagerMain as u32 => {
+            STAGE_CONTROLLER_TESTMANAGER_MAIN
+        }
+        value if value == FixedOnDeviceWdaStage::ProxyChannels as u32 => {
+            STAGE_CONTROLLER_PROXY_CHANNELS
+        }
+        value if value == FixedOnDeviceWdaStage::SessionInitialization as u32 => {
+            STAGE_CONTROLLER_SESSION_INIT
+        }
+        value if value == FixedOnDeviceWdaStage::RunnerLaunch as u32 => {
+            STAGE_CONTROLLER_RUNNER_LAUNCH
+        }
+        value if value == FixedOnDeviceWdaStage::RunnerAuthorization as u32 => {
+            STAGE_CONTROLLER_RUNNER_AUTHORIZATION
+        }
+        value if value == FixedOnDeviceWdaStage::DriverChannel as u32 => {
+            STAGE_CONTROLLER_DRIVER_CHANNEL
+        }
+        value if value == FixedOnDeviceWdaStage::StartTestPlan as u32 => {
+            STAGE_CONTROLLER_START_TEST_PLAN
+        }
+        value if value == FixedOnDeviceWdaStage::ControllerActive as u32 => STAGE_CONTROLLER_ACTIVE,
+        _ => STAGE_CONTROLLER_RSD_TCP,
+    }
+}
+
+async fn start_held_fixed_wda_controller() -> Result<JarvisDtxProbeResult, ProbeFailure> {
+    let (mut adapter, rsd_port) = {
+        let held = HELD_SESSION
+            .lock()
+            .map_err(|_| ProbeFailure::fixed(STAGE_CONTROLLER_RSD_TCP, ERROR_RUNTIME))?;
+        let session = held
+            .as_ref()
+            .ok_or_else(|| ProbeFailure::fixed(STAGE_CONTROLLER_RSD_TCP, ERROR_NO_HELD_SESSION))?;
+        if session.created_at.elapsed() > HELD_SESSION_MAX_AGE {
+            return Err(ProbeFailure::fixed(
+                STAGE_CONTROLLER_RSD_TCP,
+                ERROR_HELD_SESSION_EXPIRED,
+            ));
+        }
+        (session.adapter.clone(), session.rsd_port)
+    };
+    {
+        let controller = FIXED_WDA_CONTROLLER
+            .lock()
+            .map_err(|_| ProbeFailure::fixed(STAGE_CONTROLLER_RSD_TCP, ERROR_RUNTIME))?;
+        if controller.is_some() {
+            return Err(ProbeFailure::fixed(STAGE_CONTROLLER_RSD_TCP, ERROR_BUSY));
+        }
+    }
+
+    let rsd_stream = tokio::time::timeout(OPERATION_TIMEOUT, adapter.connect(rsd_port))
+        .await
+        .map_err(|_| ProbeFailure::fixed(STAGE_CONTROLLER_RSD_TCP, ERROR_TIMEOUT))?
+        .map_err(|_| ProbeFailure::fixed(STAGE_CONTROLLER_RSD_TCP, ERROR_ADAPTER_CONNECT))?;
+    let handshake = bounded(
+        STAGE_CONTROLLER_RSD_HANDSHAKE,
+        RsdHandshake::new(rsd_stream),
+    )
+    .await?;
+    FIXED_WDA_PROGRESS.store(0, Ordering::SeqCst);
+    let controller = tokio::time::timeout(
+        Duration::from_secs(180),
+        start_fixed_ondevice_wda_controller(adapter, handshake, &FIXED_WDA_PROGRESS),
+    )
+    .await
+    .map_err(|_| ProbeFailure::fixed(fixed_wda_progress_stage(), ERROR_TIMEOUT))?
+    .map_err(|error| ProbeFailure::from_idevice(fixed_wda_progress_stage(), error))?;
+    let mut slot = FIXED_WDA_CONTROLLER
+        .lock()
+        .map_err(|_| ProbeFailure::fixed(STAGE_CONTROLLER_ACTIVE, ERROR_RUNTIME))?;
+    *slot = Some(controller);
+
+    Ok(JarvisDtxProbeResult {
+        abi_version: ABI_VERSION,
+        stage: STAGE_CONTROLLER_ACTIVE,
+        error_code: 0,
+        error_subcode: 0,
+        channel_mask: 1,
     })
 }
 
@@ -773,16 +889,125 @@ pub unsafe extern "C" fn jarvis_rsd_hold_xctestmanager_proxy_probe(
     }
 }
 
-/// Drops the retained read-only adapter. Returns 1 if one existed, else 0.
+/// Starts the fixed on-device XCTest controller and one compile-time WDA
+/// runner. The call stops only after test-plan start or a bounded failure.
+///
+/// # Safety
+/// `output` must be a valid writable pointer for the duration of the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jarvis_rsd_hold_fixed_wda_start(output: *mut JarvisDtxProbeResult) -> i32 {
+    if output.is_null() {
+        return -1;
+    }
+    unsafe {
+        *output = JarvisDtxProbeResult {
+            abi_version: ABI_VERSION,
+            stage: STAGE_CONTROLLER_RSD_TCP,
+            error_code: ERROR_NO_HELD_SESSION,
+            ..JarvisDtxProbeResult::default()
+        };
+    }
+    let Ok(_guard) = PROBE_LOCK.try_lock() else {
+        unsafe { (*output).error_code = ERROR_BUSY };
+        return -1;
+    };
+    let runtime = match runtime() {
+        Ok(runtime) => runtime,
+        Err(failure) => {
+            unsafe { (*output).error_code = failure.code };
+            return -1;
+        }
+    };
+
+    match runtime.block_on(start_held_fixed_wda_controller()) {
+        Ok(result) => {
+            unsafe { *output = result };
+            0
+        }
+        Err(failure) => {
+            if let Ok(mut controller) = FIXED_WDA_CONTROLLER.lock() {
+                *controller = None;
+            }
+            if let Ok(mut held) = HELD_SESSION.lock() {
+                *held = None;
+            }
+            unsafe {
+                (*output).stage = failure.stage;
+                (*output).error_code = failure.code;
+                (*output).error_subcode = failure.subcode;
+            }
+            -1
+        }
+    }
+}
+
+/// Returns the current sanitized fixed-controller bootstrap stage.
+#[unsafe(no_mangle)]
+pub extern "C" fn jarvis_rsd_fixed_wda_progress() -> u32 {
+    fixed_wda_progress_stage()
+}
+
+/// Checks whether the fixed local XCTest controller task is still active.
+///
+/// # Safety
+/// `output` must be a valid writable pointer for the duration of the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jarvis_rsd_fixed_wda_check(output: *mut JarvisDtxProbeResult) -> i32 {
+    if output.is_null() {
+        return -1;
+    }
+    let Ok(mut slot) = FIXED_WDA_CONTROLLER.lock() else {
+        return -1;
+    };
+    let active = slot
+        .as_ref()
+        .is_some_and(|controller| controller.is_running());
+    if !active {
+        *slot = None;
+    }
+    unsafe {
+        *output = JarvisDtxProbeResult {
+            abi_version: ABI_VERSION,
+            stage: if active {
+                STAGE_CONTROLLER_ACTIVE
+            } else {
+                fixed_wda_progress_stage()
+            },
+            error_code: if active { 0 } else { ERROR_NO_HELD_SESSION },
+            error_subcode: 0,
+            channel_mask: u32::from(active),
+        };
+    }
+    if active { 0 } else { -1 }
+}
+
+/// Aborts and drops the fixed local XCTest controller task.
+#[unsafe(no_mangle)]
+pub extern "C" fn jarvis_rsd_fixed_wda_stop() -> i32 {
+    let Ok(_guard) = PROBE_LOCK.try_lock() else {
+        return -1;
+    };
+    let Ok(mut controller) = FIXED_WDA_CONTROLLER.lock() else {
+        return -1;
+    };
+    i32::from(controller.take().is_some())
+}
+
+/// Drops the retained read-only adapter and any fixed controller.
 #[unsafe(no_mangle)]
 pub extern "C" fn jarvis_rsd_hold_stop() -> i32 {
     let Ok(_guard) = PROBE_LOCK.try_lock() else {
         return -1;
     };
+    let Ok(mut controller) = FIXED_WDA_CONTROLLER.lock() else {
+        return -1;
+    };
+    let controller_existed = controller.take().is_some();
+    drop(controller);
     let Ok(mut held) = HELD_SESSION.lock() else {
         return -1;
     };
-    i32::from(held.take().is_some())
+    i32::from(held.take().is_some() || controller_existed)
 }
 
 #[cfg(test)]
@@ -861,6 +1086,17 @@ mod tests {
         assert_eq!(STAGE_PROXY_TESTMANAGER_CTRL_CHANNEL, 36);
         assert_eq!(STAGE_PROXY_TESTMANAGER_MAIN_CHANNEL, 37);
         assert_eq!(STAGE_PROXY_COMPLETE, 38);
+        assert_eq!(STAGE_CONTROLLER_RSD_TCP, 40);
+        assert_eq!(STAGE_CONTROLLER_RUNNER_AUTHORIZATION, 50);
+        assert_eq!(STAGE_CONTROLLER_ACTIVE, 53);
+        assert_eq!(
+            unsafe { jarvis_rsd_hold_fixed_wda_start(std::ptr::null_mut()) },
+            -1
+        );
+        assert_eq!(
+            unsafe { jarvis_rsd_fixed_wda_check(std::ptr::null_mut()) },
+            -1
+        );
         assert_eq!(TARGET.to_string(), "10.7.0.1:49152");
         assert_eq!(
             idevice::services::dvt::fixed_channel_probe::FIXED_DTX_DTSERVICEHUB

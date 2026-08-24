@@ -58,6 +58,8 @@ final class ProbeController: ObservableObject {
     @Published private(set) var dtxTestManagerMainReady = false
     @Published private(set) var proxyControlReady = false
     @Published private(set) var proxyMainReady = false
+    @Published private(set) var fixedControllerActive = false
+    @Published private(set) var fixedWDAReady = false
 
     private let worker = DispatchQueue(
         label: "com.forwardinfinity.jarvisrsdprobe.worker",
@@ -69,6 +71,7 @@ final class ProbeController: ObservableObject {
     )
     private var localNetworkAuthorizationConnection: NWConnection?
     private var localNetworkAuthorizationTimeout: DispatchWorkItem?
+    private var controllerProgressTimer: Timer?
 
     func requestFixedLocalNetworkAccess() {
         guard !isBusy else { return }
@@ -265,6 +268,7 @@ final class ProbeController: ObservableObject {
         clearProbeResult()
         clearDtxResult()
         clearProxyResult()
+        clearControllerResult()
     }
 
     func startHeldReadOnlySession() {
@@ -280,6 +284,7 @@ final class ProbeController: ObservableObject {
         clearProbeResult()
         clearDtxResult()
         clearProxyResult()
+        clearControllerResult()
 
         worker.async { [weak self] in
             guard var bytes = PairingRecordStore.read() else {
@@ -427,6 +432,77 @@ final class ProbeController: ObservableObject {
         }
     }
 
+    func runFixedWDAController() {
+        guard !isBusy else { return }
+        guard hasHeldSession else {
+            status = "Controller bootstrap blocked: no held RSD adapter"
+            stage = "Input"
+            return
+        }
+        isBusy = true
+        status = "Starting fixed local XCTest controller and WDA runner"
+        stage = "Controller starting"
+        clearControllerResult()
+        startControllerProgressTimer()
+
+        worker.async { [weak self] in
+            var result = Self.emptyDtxResult()
+            let returnCode = jarvis_rsd_hold_fixed_wda_start(&result)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.stopControllerProgressTimer()
+                self.stage = Self.stageName(result.stage)
+                if returnCode == 0,
+                   result.abi_version == 1,
+                   result.stage == UInt32(JARVIS_RSD_STAGE_CONTROLLER_ACTIVE),
+                   result.channel_mask & UInt32(JARVIS_FIXED_WDA_CONTROLLER_ACTIVE) != 0 {
+                    self.fixedControllerActive = true
+                    self.status = "Local XCTest controller active — waiting for fixed loopback WDA"
+                    Task { [weak self] in
+                        let ready = await Self.waitForFixedWDAStatus()
+                        guard let self else { return }
+                        self.isBusy = false
+                        self.fixedWDAReady = ready
+                        if ready {
+                            self.status = "LOCAL CONTROLLER + WDA PASS — fixed loopback status ready"
+                            self.stage = "WDA ready"
+                        } else {
+                            _ = jarvis_rsd_hold_stop()
+                            self.hasHeldSession = false
+                            self.fixedControllerActive = false
+                            self.status = "WDA readiness failed closed; controller and held adapter stopped"
+                            self.stage = "WDA loopback"
+                        }
+                    }
+                } else {
+                    self.isBusy = false
+                    self.hasHeldSession = false
+                    self.fixedControllerActive = false
+                    self.status = "Controller bootstrap failed closed — code \(result.error_code)/\(result.error_subcode)"
+                }
+            }
+        }
+    }
+
+    func checkFixedWDAController() {
+        guard !isBusy else { return }
+        var result = Self.emptyDtxResult()
+        let returnCode = jarvis_rsd_fixed_wda_check(&result)
+        fixedControllerActive = returnCode == 0
+        stage = Self.stageName(result.stage)
+        status = fixedControllerActive
+            ? "Fixed local XCTest controller is active"
+            : "Fixed local XCTest controller is not active"
+    }
+
+    func stopFixedWDAController() {
+        guard !isBusy else { return }
+        _ = jarvis_rsd_fixed_wda_stop()
+        clearControllerResult()
+        status = "Fixed local XCTest controller stopped"
+        stage = "Controller stopped"
+    }
+
     func stopHeldReadOnlySession() {
         guard !isBusy else { return }
         let existed = jarvis_rsd_hold_stop()
@@ -436,6 +512,7 @@ final class ProbeController: ObservableObject {
         clearProbeResult()
         clearDtxResult()
         clearProxyResult()
+        clearControllerResult()
     }
 
     func runReadOnlyProbe() {
@@ -570,6 +647,56 @@ final class ProbeController: ObservableObject {
         proxyMainReady = false
     }
 
+    private func clearControllerResult() {
+        fixedControllerActive = false
+        fixedWDAReady = false
+    }
+
+    private func startControllerProgressTimer() {
+        stopControllerProgressTimer()
+        controllerProgressTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) {
+            [weak self] _ in
+            guard let self else { return }
+            let current = jarvis_rsd_fixed_wda_progress()
+            self.stage = Self.stageName(current)
+            if current == UInt32(JARVIS_RSD_STAGE_CONTROLLER_RUNNER_AUTHORIZATION) {
+                self.status = "Runner authorization waiting — use only a real iOS system prompt directly on-device"
+            }
+        }
+    }
+
+    private func stopControllerProgressTimer() {
+        controllerProgressTimer?.invalidate()
+        controllerProgressTimer = nil
+    }
+
+    private nonisolated static func waitForFixedWDAStatus() async -> Bool {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 2
+        configuration.timeoutIntervalForResource = 2
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        guard let url = URL(string: "http://127.0.0.1:8100/status") else { return false }
+
+        for _ in 0..<120 {
+            do {
+                let (data, response) = try await session.data(from: url)
+                if let http = response as? HTTPURLResponse,
+                   http.statusCode == 200,
+                   !data.isEmpty,
+                   data.count <= 262_144,
+                   (try? JSONSerialization.jsonObject(with: data)) != nil {
+                    return true
+                }
+            } catch {
+                // Bounded readiness polling returns no raw network error.
+            }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        return false
+    }
+
     private static func stageName(_ value: UInt32) -> String {
         switch value {
         case UInt32(JARVIS_RSD_STAGE_INPUT): return "Input"
@@ -602,6 +729,20 @@ final class ProbeController: ObservableObject {
         case UInt32(JARVIS_RSD_STAGE_PROXY_TESTMANAGER_CTRL_CHANNEL): return "Gate 3 control proxy"
         case UInt32(JARVIS_RSD_STAGE_PROXY_TESTMANAGER_MAIN_CHANNEL): return "Gate 3 main proxy"
         case UInt32(JARVIS_RSD_STAGE_PROXY_COMPLETE): return "Gate 3 complete"
+        case UInt32(JARVIS_RSD_STAGE_CONTROLLER_RSD_TCP): return "Controller RSD TCP"
+        case UInt32(JARVIS_RSD_STAGE_CONTROLLER_RSD_HANDSHAKE): return "Controller RSD handshake"
+        case UInt32(JARVIS_RSD_STAGE_CONTROLLER_INSTALLATION_PROXY): return "Installation proxy"
+        case UInt32(JARVIS_RSD_STAGE_CONTROLLER_RUNNER_LOOKUP): return "Fixed runner lookup"
+        case UInt32(JARVIS_RSD_STAGE_CONTROLLER_DTSERVICEHUB): return "Controller dtservicehub"
+        case UInt32(JARVIS_RSD_STAGE_CONTROLLER_TESTMANAGER_CTRL): return "Controller testmanager control"
+        case UInt32(JARVIS_RSD_STAGE_CONTROLLER_TESTMANAGER_MAIN): return "Controller testmanager main"
+        case UInt32(JARVIS_RSD_STAGE_CONTROLLER_PROXY_CHANNELS): return "Controller proxy channels"
+        case UInt32(JARVIS_RSD_STAGE_CONTROLLER_SESSION_INIT): return "XCTest session initialization"
+        case UInt32(JARVIS_RSD_STAGE_CONTROLLER_RUNNER_LAUNCH): return "Fixed runner launch"
+        case UInt32(JARVIS_RSD_STAGE_CONTROLLER_RUNNER_AUTHORIZATION): return "Runner authorization"
+        case UInt32(JARVIS_RSD_STAGE_CONTROLLER_DRIVER_CHANNEL): return "XCTest driver channel"
+        case UInt32(JARVIS_RSD_STAGE_CONTROLLER_START_TEST_PLAN): return "Start test plan"
+        case UInt32(JARVIS_RSD_STAGE_CONTROLLER_ACTIVE): return "Local controller active"
         default: return "None"
         }
     }

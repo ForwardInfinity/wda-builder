@@ -22,6 +22,11 @@
   <string>$(CURRENT_PROJECT_VERSION)</string>
   <key>LSRequiresIPhoneOS</key>
   <true/>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
   <key>NSLocalNetworkUsageDescription</key>
   <string>Jarvis RSD Probe connects only to the LocalDevVPN fake peer for a user-initiated, read-only device-service check.</string>
   <key>UILaunchScreen</key>

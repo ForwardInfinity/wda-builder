@@ -28,7 +28,7 @@ private struct ProbeView: View {
                     Label("Read-only foreground experiment", systemImage: "checkmark.shield")
                     Text("Fixed endpoint: LocalDevVPN fake peer 10.7.0.1:49152")
                         .font(.footnote.monospaced())
-                    Text("No pair-setup, PIN callback, relay, XCTest session, authorization, runner launch, WDA, HID, passcode, or VPS command channel is compiled into this app.")
+                    Text("Fixed on-device XCTest/WDA bootstrap is compiled with no caller-selected destination, bundle, selector, payload, HID, passcode, or VPS command channel. Pair-setup and relay remain absent.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -164,6 +164,40 @@ private struct ProbeView: View {
                         Image(systemName: controller.proxyMainReady ? "checkmark.circle.fill" : "minus.circle")
                             .foregroundStyle(controller.proxyMainReady ? .green : .secondary)
                     }
+                }
+
+                Section("Accelerated E2E — fixed local controller") {
+                    Text("One fixed action initializes XCTest, launches only the preinstalled fixed WDA runner, performs the XCTest authorization request, starts its test plan, and checks only http://127.0.0.1:8100/status. If a real iOS authorization prompt appears, enter it directly on-device; no authorization secret is read or stored by this app.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button {
+                        controller.runFixedWDAController()
+                    } label: {
+                        Label("Start fixed local controller + WDA", systemImage: "bolt.shield")
+                    }
+                    .disabled(
+                        controller.isBusy || !controller.hasHeldSession || controller.fixedControllerActive
+                    )
+                    HStack {
+                        Text("Local XCTest controller")
+                        Spacer()
+                        Image(systemName: controller.fixedControllerActive ? "checkmark.circle.fill" : "minus.circle")
+                            .foregroundStyle(controller.fixedControllerActive ? .green : .secondary)
+                    }
+                    HStack {
+                        Text("Loopback WDA")
+                        Spacer()
+                        Image(systemName: controller.fixedWDAReady ? "checkmark.circle.fill" : "minus.circle")
+                            .foregroundStyle(controller.fixedWDAReady ? .green : .secondary)
+                    }
+                    Button("Check local controller") {
+                        controller.checkFixedWDAController()
+                    }
+                    .disabled(controller.isBusy || !controller.fixedControllerActive)
+                    Button("Stop local controller", role: .destructive) {
+                        controller.stopFixedWDAController()
+                    }
+                    .disabled(controller.isBusy || !controller.fixedControllerActive)
                 }
 
                 Section("Sanitized result") {

@@ -6,8 +6,8 @@ commit = "63a341d7f624b5c1f2540e4cecb269151a2caf52"
 tree = "ac08b6133eb024eb1a4f06cf25fdd598a79daa72"
 license = "MIT"
 patch = "patches/idevice-verify-only-privacy-and-bounds.patch"
-patch_sha256 = "5974ff80668ccdddda705ee98002f6b0cb55bb22fbf2f95e838277e77cbbb425"
-patch_scope = "pair-verify split, private-key log removal, tunnel bounds, fixed Gate 2 DTX handshakes, and fixed Gate 3 XCTestManager proxy-channel open/close"
+patch_sha256 = "ad5ce44440618e948f0eb403a21fe9146aba156a76269dd0e3e438639e4b78fc"
+patch_scope = "pair-verify privacy/bounds, fixed DTX probes, and one compile-time on-device XCTest/WDA controller for the installed runner"
 
 [localdevvpn_reference_only]
 repository = "https://github.com/seomin0610/LocalDevVPN.git"

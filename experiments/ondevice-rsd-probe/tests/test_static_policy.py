@@ -32,11 +32,12 @@ class StaticPolicyTests(unittest.TestCase):
         cargo = (ROOT / "rust/Cargo.toml").read_text()
         self.assertIn("lto = false", cargo)
         self.assertIn('strip = "debuginfo"', cargo)
+        self.assertEqual(cargo.count('"xctest"'), 1)
         self.assertIn("ac08b6133eb024eb1a4f06cf25fdd598a79daa72", manifest)
         patch = ROOT / "patches/idevice-verify-only-privacy-and-bounds.patch"
         self.assertEqual(
             hashlib.sha256(patch.read_bytes()).hexdigest(),
-            "5974ff80668ccdddda705ee98002f6b0cb55bb22fbf2f95e838277e77cbbb425",
+            "ad5ce44440618e948f0eb403a21fe9146aba156a76269dd0e3e438639e4b78fc",
         )
         patch_text = patch.read_text()
         self.assertIn("Never emit it via", patch_text)
@@ -56,15 +57,17 @@ class StaticPolicyTests(unittest.TestCase):
             patch_text.count(".make_channel(XCTEST_MANAGER_PROXY_IDENTIFIER)"),
             2,
         )
-        for forbidden_selector in (
-            "_IDE_initiateControlSession",
-            "_IDE_initiateSessionWithIdentifier",
-            "_IDE_authorizeTestSessionWithProcessID",
-            "launchSuspendedProcessWithDevicePath",
-            "_IDE_startExecutingTestPlan",
-            "XCTestDriverInterface",
-        ):
-            self.assertNotIn(forbidden_selector, patch_text)
+        self.assertIn("start_fixed_ondevice_wda_controller", patch_text)
+        self.assertEqual(
+            patch_text.count(
+                '+const FIXED_ONDEVICE_WDA_BUNDLE_ID: &str = "com.ios-use.wda.00008101-00064d1a3a68001e";'
+            ),
+            1,
+        )
+        self.assertIn('+        "USE_IP": "127.0.0.1",', patch_text)
+        self.assertIn('+        "USE_PORT": "8100",', patch_text)
+        self.assertNotIn("+    runner_bundle_id:", patch_text)
+        self.assertNotIn("+    target_bundle_id:", patch_text)
         self.assertEqual(patch_text.count('+const TESTMANAGERD: &str = "com.apple.dt.testmanagerd.remote";'), 1)
         self.assertEqual(patch_text.count('+const DTSERVICEHUB: &str = "com.apple.instruments.dtservicehub";'), 1)
         self.assertNotIn("+pub mod process_control;", patch_text)
@@ -88,15 +91,21 @@ class StaticPolicyTests(unittest.TestCase):
                 "jarvis_rsd_hold_check",
                 "jarvis_rsd_hold_dtx_probe",
                 "jarvis_rsd_hold_xctestmanager_proxy_probe",
+                "jarvis_rsd_hold_fixed_wda_start",
+                "jarvis_rsd_fixed_wda_progress",
+                "jarvis_rsd_fixed_wda_check",
+                "jarvis_rsd_fixed_wda_stop",
                 "jarvis_rsd_hold_stop",
             ],
         )
-        self.assertEqual(RUST.count("#[unsafe(no_mangle)]"), 7)
+        self.assertEqual(RUST.count("#[unsafe(no_mangle)]"), 11)
         self.assertIn("HELD_SESSION_MAX_AGE", RUST)
         self.assertIn("Duration::from_secs(10 * 60)", RUST)
 
     def test_header_exposes_no_generic_transport(self):
-        functions = re.findall(r"^int32_t (jarvis_[a-z0-9_]+)\(", HEADER, re.MULTILINE)
+        functions = re.findall(
+            r"^(?:int32_t|uint32_t) (jarvis_[a-z0-9_]+)\(", HEADER, re.MULTILINE
+        )
         self.assertEqual(
             functions,
             [
@@ -106,6 +115,10 @@ class StaticPolicyTests(unittest.TestCase):
                 "jarvis_rsd_hold_check",
                 "jarvis_rsd_hold_dtx_probe",
                 "jarvis_rsd_hold_xctestmanager_proxy_probe",
+                "jarvis_rsd_hold_fixed_wda_start",
+                "jarvis_rsd_fixed_wda_progress",
+                "jarvis_rsd_fixed_wda_check",
+                "jarvis_rsd_fixed_wda_stop",
                 "jarvis_rsd_hold_stop",
             ],
         )
@@ -117,7 +130,6 @@ class StaticPolicyTests(unittest.TestCase):
 
     def test_swift_network_scope_is_fixed_and_has_no_remote_command_plane(self):
         for forbidden in (
-            "URLSession",
             "NWBrowser",
             "NWListener",
             "NWEndpoint.Service",
@@ -142,6 +154,10 @@ class StaticPolicyTests(unittest.TestCase):
         self.assertIn("does not open a DTX service channel", SWIFT)
         self.assertIn("Probe two fixed proxy channels", SWIFT)
         self.assertIn("sends no XCTest session-init", SWIFT)
+        self.assertEqual(SWIFT.count('URL(string: "http://127.0.0.1:8100/status")'), 1)
+        self.assertIn("Start fixed local controller + WDA", SWIFT)
+        self.assertIn("real iOS system prompt directly on-device", SWIFT)
+        self.assertIn("NSAllowsLocalNetworking", INFO)
         self.assertNotIn("launch_runner", RUST + SWIFT + HEADER)
         self.assertNotIn("authorize_test", RUST + SWIFT + HEADER)
         self.assertEqual(SWIFT.count("bootstrap.mobiledevicepairing"), 2)
