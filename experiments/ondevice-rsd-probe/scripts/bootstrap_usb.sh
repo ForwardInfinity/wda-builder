@@ -80,9 +80,15 @@ if len(record['identifier']) != 36 or len(record['private_key']) != 32 or len(re
 print('BOOTSTRAP_STATIC_INPUT_PASS')
 PY
 
-usb_devices="$(timeout 15 "$PMD" usbmux list --usb --simple 2>"$TMP/usbmux.err" || true)"
-[[ "$usb_devices" == "$UDID" ]] \
+timeout 15 "$PMD" usbmux list --usb --simple \
+  >"$TMP/usbmux.json" 2>"$TMP/usbmux.err" \
   || { echo 'BOOTSTRAP_WAITING connect exactly the approved iPhone over USB' >&2; exit 3; }
+python3 - "$TMP/usbmux.json" <<'PY'
+import json,sys
+devices=json.load(open(sys.argv[1],encoding='utf-8'))
+if devices != ['00008101-00064D1A3A68001E']:
+    raise SystemExit('BOOTSTRAP_WAITING connect exactly the approved iPhone over USB')
+PY
 echo 'BOOTSTRAP_USB_SCOPE_PASS'
 
 # A bounded lockdown query confirms trust/connectivity without printing device metadata.
@@ -112,8 +118,8 @@ if 'com.forwardinfinity.jarvisrsdprobe' not in apps:
 PY
 echo 'BOOTSTRAP_PROBE_INSTALL_PASS'
 
-timeout 60 "$PMD" apps push --udid "$UDID" --documents \
-  "$BUNDLE" "$PAIRING" 'bootstrap.mobiledevicepairing' \
+timeout 60 "$PMD" apps push --udid "$UDID" \
+  "$BUNDLE" "$PAIRING" 'Documents/bootstrap.mobiledevicepairing' \
   >"$TMP/push.out" 2>"$TMP/push.err" \
   || { echo 'BOOTSTRAP_PAIRING_STAGE_FAILED' >&2; exit 5; }
 echo 'BOOTSTRAP_PAIRING_STAGED_PASS'
