@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import JarvisRSDProbeFFI
+import Network
 
 struct FixedServiceStatus: Identifiable {
     let id: String
@@ -56,6 +57,63 @@ final class ProbeController: ObservableObject {
         label: "com.forwardinfinity.jarvisrsdprobe.worker",
         qos: .userInitiated
     )
+    private let localNetworkAuthorizationQueue = DispatchQueue(
+        label: "com.forwardinfinity.jarvisrsdprobe.local-network-authorization",
+        qos: .userInitiated
+    )
+    private var localNetworkAuthorizationConnection: NWConnection?
+    private var localNetworkAuthorizationTimeout: DispatchWorkItem?
+
+    func requestFixedLocalNetworkAccess() {
+        guard !isBusy else { return }
+        isBusy = true
+        status = "Requesting official iOS Local Network authorization"
+        stage = "Local network permission"
+
+        let connection = NWConnection(
+            host: NWEndpoint.Host("10.7.0.1"),
+            port: NWEndpoint.Port(rawValue: 49_152)!,
+            using: .tcp
+        )
+        localNetworkAuthorizationConnection = connection
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            guard let self, let connection else { return }
+            switch state {
+            case .ready:
+                DispatchQueue.main.async {
+                    self.finishFixedLocalNetworkRequest(
+                        "Local Network authorization path ready — no application data sent",
+                        connection: connection
+                    )
+                }
+            case .failed:
+                DispatchQueue.main.async {
+                    self.finishFixedLocalNetworkRequest(
+                        "Local Network request ended — verify the iOS permission toggle",
+                        connection: connection
+                    )
+                }
+            default:
+                break
+            }
+        }
+
+        let timeout = DispatchWorkItem { [weak self, weak connection] in
+            guard let self, let connection else { return }
+            DispatchQueue.main.async {
+                self.finishFixedLocalNetworkRequest(
+                    "Local Network request timed out — verify the iOS permission toggle",
+                    connection: connection
+                )
+            }
+        }
+        localNetworkAuthorizationTimeout = timeout
+        connection.start(queue: localNetworkAuthorizationQueue)
+        localNetworkAuthorizationQueue.asyncAfter(
+            deadline: .now() + 60,
+            execute: timeout
+        )
+    }
 
     func importUSBStagedPairingRecord() {
         guard !isBusy else { return }
@@ -263,6 +321,21 @@ final class ProbeController: ObservableObject {
             try Data(repeating: 0, count: byteCount).write(to: url, options: [])
         }
         try fileManager.removeItem(at: url)
+    }
+
+    private func finishFixedLocalNetworkRequest(
+        _ message: String,
+        connection: NWConnection
+    ) {
+        guard localNetworkAuthorizationConnection === connection else { return }
+        localNetworkAuthorizationTimeout?.cancel()
+        localNetworkAuthorizationTimeout = nil
+        connection.stateUpdateHandler = nil
+        connection.cancel()
+        localNetworkAuthorizationConnection = nil
+        isBusy = false
+        status = message
+        stage = "Local network permission"
     }
 
     private func finishLocalFailure(_ message: String) {

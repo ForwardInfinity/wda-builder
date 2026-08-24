@@ -70,12 +70,12 @@ class StaticPolicyTests(unittest.TestCase):
             ).lower()
             self.assertNotIn(forbidden, declarations)
 
-    def test_swift_has_no_independent_network_or_remote_command_plane(self):
+    def test_swift_network_scope_is_fixed_and_has_no_remote_command_plane(self):
         for forbidden in (
             "URLSession",
-            "NWConnection",
+            "NWBrowser",
             "NWListener",
-            "Network.framework",
+            "NWEndpoint.Service",
             "workbox.tailfd8ac6.ts.net",
             "/v1/",
             "secure-unlock",
@@ -83,6 +83,11 @@ class StaticPolicyTests(unittest.TestCase):
             "localhost:8100",
         ):
             self.assertNotIn(forbidden, SWIFT)
+        self.assertEqual(SWIFT.count("NWConnection("), 1)
+        self.assertEqual(SWIFT.count('NWEndpoint.Host("10.7.0.1")'), 1)
+        self.assertEqual(SWIFT.count("NWEndpoint.Port(rawValue: 49_152)"), 1)
+        self.assertIn("Request Local Network access", SWIFT)
+        self.assertIn("NSLocalNetworkUsageDescription", INFO)
         self.assertIn("AfterFirstUnlockThisDeviceOnly", SWIFT)
         self.assertIn("kSecAttrSynchronizable", SWIFT)
         self.assertIn("Run read-only RSD probe", SWIFT)

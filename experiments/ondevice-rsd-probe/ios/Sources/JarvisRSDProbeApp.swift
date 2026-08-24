@@ -60,8 +60,17 @@ private struct ProbeView: View {
                 }
 
                 Section("Gate 1") {
-                    Text("Start LocalDevVPN first, then run exactly one bounded probe.")
+                    Text("Start LocalDevVPN first, request the official iOS Local Network permission once, then run one bounded probe.")
                         .font(.footnote)
+                    Button {
+                        controller.requestFixedLocalNetworkAccess()
+                    } label: {
+                        Label("Request Local Network access", systemImage: "network.badge.shield.half.filled")
+                    }
+                    .disabled(controller.isBusy)
+                    Text("Uses one bounded Network-framework connection to the same fixed 10.7.0.1:49152 endpoint only to trigger the system permission flow. It sends no application data.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Button {
                         controller.runReadOnlyProbe()
                     } label: {
