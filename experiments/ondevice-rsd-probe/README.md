@@ -18,9 +18,11 @@ It is deliberately separate from production Agent v19.
 - It checks only four compile-time service names and returns a bit mask/count.
 - No DVT, XCTest, WDA, HID, process launch, screenshots, or passcode access.
 - Pairing data is bounded to 256 KiB, validated locally, and stored as `AfterFirstUnlockThisDeviceOnly` in a non-synchronizing Keychain item.
-- USB bootstrap can stage only `Documents/bootstrap.mobiledevicepairing`; the app tightens its protection, validates it, moves it to Keychain, overwrites/removes the staged file, and rolls back Keychain if cleanup fails.
+- USB bootstrap can stage only `Documents/bootstrap.mobiledevicepairing`; the app reads it only inside its data-protected sandbox, validates it, moves it to Keychain, overwrites/removes the staged file, and rolls back Keychain if cleanup fails.
+- One fixed `NWConnection` may invoke the official Local Network permission flow; it uses the same endpoint and sends no application data. No Bonjour browser or listener is compiled.
 - Raw pairing identifiers, keys, service ports, UUIDs, and error text are never returned or logged.
-- One foreground probe runs at a time with eight-second stage bounds.
+- One foreground operation runs at a time with eight-second network-stage bounds.
+- The optional held-adapter gate retains only the userspace adapter and fixed RSD port, expires after ten minutes, and has an explicit stop. It is labeled warm continuity, not cold recoverability.
 
 ## Source pin
 
@@ -42,12 +44,16 @@ scripts/prepare_vendor.sh
 
 The unsigned iOS build runs on a macOS/Xcode 26 worker via `build-ios-rsd-probe.yml`.
 
-## Device gate (not yet executed)
+## Gate 1 result — 2026-08-24
 
-1. User installs and starts the App Store LocalDevVPN.
-2. A pairing record is provisioned locally during an approved bootstrap and pushed to the fixed Documents filename.
-3. User taps **Import fixed USB-staged record** while unlocked; the temporary file is removed.
-4. User explicitly taps **Run read-only RSD probe**.
-5. Success means only an RSD transport handshake. Missing developer services may indicate absent DDI and is not a transport failure.
+1. LocalDevVPN connected with `10.7.0.0/24` and fake peer `10.7.0.1`.
+2. The USB-staged record was validated, stored in device-only Keychain, and removed from Documents.
+3. Before Local Network authorization, BSD TCP failed with Darwin `EHOSTUNREACH` (`1/65`) without a prompt. The bounded fixed `NWConnection` triggered the official prompt; the user allowed it directly on-device.
+4. Wi-Fi and physically cableless Wi-Fi both completed pair-verify, TLS-PSK/userspace tunnel setup, and RSD protocol 7 with 82 advertised services.
+5. A fresh attempt with Wi-Fi disabled and Cellular active failed closed at the fixed TCP endpoint with `ECONNREFUSED` (`1/61`). Fresh Cellular recovery therefore did **not** pass.
+6. A Wi-Fi-established held adapter remained usable after cable removal, Wi-Fi-to-Cellular transition, iPhone lock, and a VPS restart. The Agent reconnected over Cellular in 1.312 seconds; after direct user unlock, the same adapter again completed RSD protocol 7 with 82 services.
+7. The held adapter was explicitly stopped and the UI confirmed `None`.
 
-No secret-bearing or UI-control action is permitted in this target.
+This proves warm on-device RSD continuity only. It does not prove direct testmanager channels, XCTest/WDA, UI control, secure unlock, cold app/VPN recovery, or reboot/DDI recovery. See `demo/2026-08-24_gate0-gate1-ondevice-rsd-probe-build.txt`.
+
+No secret-bearing or UI-control action is permitted in this target. Gate 2 requires separate explicit authorization.
