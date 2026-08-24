@@ -68,4 +68,14 @@ This proves warm on-device RSD continuity only. It does not prove direct testman
 
 This is a **warm on-device DTX-transport continuity PASS**. It does not prove fresh Cellular pairing, cold recovery, an on-device XCTest controller, or UI control. See `demo/2026-08-24_gate2-fixed-dtx-transport-pass.txt`.
 
-No secret-bearing or UI-control action is permitted in this target. Gate 3 was explicitly authorized and remains bounded to fixed proxy-channel open/close. XCTest session initialization, authorization, and runner launch each remain outside this authorization.
+## Gate 3 result — 2026-08-24
+
+1. On Wi-Fi, the app opened one fixed `dtxproxy:XCTestManager_IDEInterface:XCTestManager_DaemonConnectionInterface` channel on each of two testmanagerd transports, then closed both channel handles and transports: PASS.
+2. The same exact action passed after physical cable removal and warm Wi-Fi-to-Cellular transition. Its immediately preceding held-RSD check was `Complete`, protocol `7`, services `82`.
+3. Independent checks showed Apple USB `0`, libimobiledevice USB `0`, and local RSD/WDA holders `0`.
+4. The held adapter was explicitly stopped after evidence collection.
+5. No control/main XCTest session initialization, authorization, driver channel, process/runner launch, test plan, WDA, HID, UI, or secret action occurred.
+
+This is a **warm fixed XCTestManager proxy-channel continuity PASS**, not an XCTest session or cold-recovery result. See `demo/2026-08-24_gate3-fixed-xctestmanager-proxy-pass.txt`.
+
+No secret-bearing or UI-control action is permitted in this target. Any XCTest control-session initialization is a new capability and requires a separately authorized gate. Main-session initialization, authorization, and runner launch remain later independent boundaries.

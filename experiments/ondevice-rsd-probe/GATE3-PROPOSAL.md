@@ -1,6 +1,6 @@
 # Proposed Gate 3: fixed XCTestManager proxy-channel open/close
 
-Status: **explicitly authorized; bounded implementation and validation in progress**.
+Status: **PASS on Wi-Fi and physically cableless warm Wi-Fi→Cellular**.
 
 Gate 2 proved three fixed TCP/DTX capability handshakes. It deliberately used only each connection's root DTX channel. The next smallest capability increase is to request the two fixed XCTestManager service channels and immediately close them, without sending an XCTest session message.
 
@@ -54,4 +54,6 @@ Authorization received verbatim:
 
 > **Tiếp tục Gate 3**
 
-This authorization covers only the fixed proxy-channel open/close action above. It does not authorize XCTest session initialization, authorization, runner launch, WDA, HID, or UI control.
+This authorization covered only the fixed proxy-channel open/close action above. It did not authorize XCTest session initialization, authorization, runner launch, WDA, HID, or UI control.
+
+Evidence: `demo/2026-08-24_gate3-fixed-xctestmanager-proxy-pass.txt`.
