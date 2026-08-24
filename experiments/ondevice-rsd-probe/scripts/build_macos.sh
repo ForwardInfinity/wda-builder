@@ -77,7 +77,7 @@ for forbidden in \
   'performIoHidEvent' \
   'localhost:8100' \
   'start-rsd-relay'; do
-  if grep -Fq "$forbidden" /tmp/jarvis-rsd-probe-app.strings; then
+  if grep -Fxq "$forbidden" /tmp/jarvis-rsd-probe-app.strings; then
     echo "forbidden binary string: $forbidden" >&2
     exit 3
   fi
