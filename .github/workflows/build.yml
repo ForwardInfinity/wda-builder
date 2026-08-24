@@ -85,13 +85,14 @@ jobs:
           for required in \
             'workbox.tailfd8ac6.ts.net' \
             'ios-standalone-20-integrated-controller' \
-            'Jarvis cellular recovery' \
+            'Jarvis integrated recovery' \
             'INTEGRATED JARVIS CONTROLLER + WDA PASS' \
             '10.7.0.1' \
             'com.ios-use.wda.00008101-00064d1a3a68001e' \
             '_IDE_authorizeTestSessionWithProcessID:' \
             'http://127.0.0.1:8100/status' \
-            'secure-unlock'; do
+            'secure-unlock' \
+            'performIoHidEvent'; do
             grep -Fq "$required" /tmp/jarvis-agent-v20.strings || { echo "required marker absent: $required" >&2; exit 3; }
           done
           for forbidden in \
@@ -99,8 +100,7 @@ jobs:
             'probe-tunnel-services' \
             'probe-private-hid' \
             'start-rsd-relay' \
-            '/v1/rsd-relay/' \
-            'performIoHidEvent'; do
+            '/v1/rsd-relay/'; do
             ! grep -Fxq "$forbidden" /tmp/jarvis-agent-v20.strings || { echo "forbidden marker present: $forbidden" >&2; exit 3; }
           done
           cat > "$APP/JarvisAgentBuild.json" <<'JSON'
