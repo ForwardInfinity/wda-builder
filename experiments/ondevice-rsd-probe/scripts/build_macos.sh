@@ -69,8 +69,11 @@ if /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$APP/Info.plist" >/dev
   echo 'experimental probe must not declare background modes' >&2
   exit 3
 fi
-/usr/libexec/PlistBuddy -c 'Print :BGTaskSchedulerPermittedIdentifiers:0' "$APP/Info.plist" \
-  | grep -qx 'com.forwardinfinity.jarvisrsdprobe.controller.*'
+continued_identifier="$(/usr/libexec/PlistBuddy -c 'Print :BGTaskSchedulerPermittedIdentifiers:0' "$APP/Info.plist")"
+if [[ "$continued_identifier" != 'com.forwardinfinity.jarvisrsdprobe.controller.*' ]]; then
+  echo "unexpected continued-processing identifier: $continued_identifier" >&2
+  exit 3
+fi
 if /usr/libexec/PlistBuddy -c 'Print :BGTaskSchedulerPermittedIdentifiers:1' "$APP/Info.plist" >/dev/null 2>&1; then
   echo 'experimental probe has an unexpected background-task identifier' >&2
   exit 3
@@ -93,9 +96,15 @@ grep -q 'dtxproxy:XCTestManager_IDEInterface:XCTestDriverInterface' /tmp/jarvis-
 grep -q 'launchSuspendedProcessWithDevicePath:bundleIdentifier:environment:arguments:options:' /tmp/jarvis-rsd-probe-app.strings
 grep -q 'http://127.0.0.1:8100/status' /tmp/jarvis-rsd-probe-app.strings
 grep -q 'LOCAL CONTROLLER + WDA PASS' /tmp/jarvis-rsd-probe-app.strings
-grep -q 'BGContinuedProcessingTaskRequest' /tmp/jarvis-rsd-probe-app.strings
-grep -q 'Jarvis local XCTest controller' /tmp/jarvis-rsd-probe-app.strings
-grep -q 'Cold restore rejected' /tmp/jarvis-rsd-probe-app.strings
+for required in \
+  'BGContinuedProcessingTaskRequest' \
+  'Jarvis local XCTest controller' \
+  'Cold restore rejected'; do
+  if ! grep -Fq "$required" /tmp/jarvis-rsd-probe-app.strings; then
+    echo "required continued-processing binary string absent: $required" >&2
+    exit 3
+  fi
+done
 for forbidden in \
   'setupManualPairing' \
   'workbox.tailfd8ac6.ts.net' \
