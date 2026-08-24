@@ -40,7 +40,16 @@ private struct ProbeView: View {
                         Text(controller.hasPairingRecord ? "Present" : "Absent")
                             .foregroundStyle(controller.hasPairingRecord ? .green : .secondary)
                     }
-                    Button("Import pairing record…") {
+                    Button {
+                        controller.importUSBStagedPairingRecord()
+                    } label: {
+                        Label("Import fixed USB-staged record", systemImage: "cable.connector")
+                    }
+                    .disabled(controller.isBusy)
+                    Text("Reads only Documents/bootstrap.mobiledevicepairing, then removes it after moving the validated record into Keychain.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Import pairing record from Files…") {
                         showingImporter = true
                     }
                     .disabled(controller.isBusy)

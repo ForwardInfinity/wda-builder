@@ -18,6 +18,7 @@ It is deliberately separate from production Agent v19.
 - It checks only four compile-time service names and returns a bit mask/count.
 - No DVT, XCTest, WDA, HID, process launch, screenshots, or passcode access.
 - Pairing data is bounded to 256 KiB, validated locally, and stored as `AfterFirstUnlockThisDeviceOnly` in a non-synchronizing Keychain item.
+- USB bootstrap can stage only `Documents/bootstrap.mobiledevicepairing`; the app tightens its protection, validates it, moves it to Keychain, overwrites/removes the staged file, and rolls back Keychain if cleanup fails.
 - Raw pairing identifiers, keys, service ports, UUIDs, and error text are never returned or logged.
 - One foreground probe runs at a time with eight-second stage bounds.
 
@@ -44,8 +45,8 @@ The unsigned iOS build runs on a macOS/Xcode 26 worker via `build-ios-rsd-probe.
 ## Device gate (not yet executed)
 
 1. User installs and starts the App Store LocalDevVPN.
-2. A pairing record is provisioned locally during an approved bootstrap.
-3. User imports it into this probe while unlocked.
+2. A pairing record is provisioned locally during an approved bootstrap and pushed to the fixed Documents filename.
+3. User taps **Import fixed USB-staged record** while unlocked; the temporary file is removed.
 4. User explicitly taps **Run read-only RSD probe**.
 5. Success means only an RSD transport handshake. Missing developer services may indicate absent DDI and is not a transport failure.
 

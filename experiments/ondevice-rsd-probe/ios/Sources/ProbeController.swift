@@ -57,6 +57,79 @@ final class ProbeController: ObservableObject {
         qos: .userInitiated
     )
 
+    func importUSBStagedPairingRecord() {
+        guard !isBusy else { return }
+        isBusy = true
+        status = "Validating fixed USB-staged pairing record"
+        stage = "Pairing import"
+        let stagedURL = FileManager.default.urls(
+            for: .documentDirectory,
+            in: .userDomainMask
+        )[0].appendingPathComponent("bootstrap.mobiledevicepairing", isDirectory: false)
+
+        worker.async { [weak self] in
+            var bytes = Data()
+            var outcome = "USB staging import rejected"
+            var accepted = false
+            do {
+                let fileManager = FileManager.default
+                let values = try stagedURL.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+                guard values.isRegularFile == true,
+                      let fileSize = values.fileSize,
+                      fileSize > 0,
+                      fileSize <= maximumPairingRecordBytes else {
+                    throw ImportError.invalidBounds
+                }
+                try fileManager.setAttributes(
+                    [
+                        .posixPermissions: 0o600,
+                        .protectionKey: FileProtectionType.completeUntilFirstUserAuthentication,
+                    ],
+                    ofItemAtPath: stagedURL.path
+                )
+                bytes = try Data(contentsOf: stagedURL, options: [])
+                guard !bytes.isEmpty,
+                      bytes.count <= maximumPairingRecordBytes,
+                      validatePairingRecord(bytes) else {
+                    throw ImportError.invalidFormat
+                }
+                guard PairingRecordStore.write(bytes) else {
+                    throw ImportError.storageFailure
+                }
+                do {
+                    try Self.removeStagedRecord(at: stagedURL, byteCount: bytes.count)
+                } catch {
+                    _ = PairingRecordStore.delete()
+                    throw ImportError.cleanupFailure
+                }
+                accepted = true
+                outcome = "USB-staged record moved into device-local Keychain"
+            } catch ImportError.invalidBounds {
+                outcome = "USB staging rejected: invalid size or file type"
+            } catch ImportError.invalidFormat {
+                outcome = "USB staging rejected: invalid RPPairing record"
+            } catch ImportError.cleanupFailure {
+                outcome = "USB staging rejected: secure cleanup failed"
+            } catch {
+                outcome = "USB staging rejected: local read or storage failure"
+            }
+            if !accepted {
+                try? Self.removeStagedRecord(at: stagedURL, byteCount: bytes.count)
+            }
+            if !bytes.isEmpty {
+                bytes.resetBytes(in: 0..<bytes.count)
+            }
+
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.hasPairingRecord = accepted && PairingRecordStore.isPresent
+                self.isBusy = false
+                self.status = outcome
+                self.stage = accepted ? "Validated" : "Rejected"
+            }
+        }
+    }
+
     func importPairingRecord(from url: URL) {
         guard !isBusy else { return }
         isBusy = true
@@ -179,6 +252,15 @@ final class ProbeController: ObservableObject {
         }
     }
 
+    private nonisolated static func removeStagedRecord(at url: URL, byteCount: Int) throws {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        if byteCount > 0, byteCount <= maximumPairingRecordBytes {
+            try Data(repeating: 0, count: byteCount).write(to: url, options: [])
+        }
+        try fileManager.removeItem(at: url)
+    }
+
     private func finishLocalFailure(_ message: String) {
         isBusy = false
         status = message
@@ -213,5 +295,6 @@ final class ProbeController: ObservableObject {
         case invalidBounds
         case invalidFormat
         case storageFailure
+        case cleanupFailure
     }
 }

@@ -86,6 +86,8 @@ class StaticPolicyTests(unittest.TestCase):
         self.assertIn("AfterFirstUnlockThisDeviceOnly", SWIFT)
         self.assertIn("kSecAttrSynchronizable", SWIFT)
         self.assertIn("Run read-only RSD probe", SWIFT)
+        self.assertEqual(SWIFT.count("bootstrap.mobiledevicepairing"), 2)
+        self.assertIn("removeStagedRecord", SWIFT)
 
     def test_no_background_mode_or_production_bundle_collision(self):
         self.assertNotIn("UIBackgroundModes", INFO)
