@@ -73,6 +73,9 @@ final class ProbeController: ObservableObject {
             var accepted = false
             do {
                 let fileManager = FileManager.default
+                guard fileManager.fileExists(atPath: stagedURL.path) else {
+                    throw ImportError.stagingMissing
+                }
                 let values = try stagedURL.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
                 guard values.isRegularFile == true,
                       let fileSize = values.fileSize,
@@ -80,13 +83,10 @@ final class ProbeController: ObservableObject {
                       fileSize <= maximumPairingRecordBytes else {
                     throw ImportError.invalidBounds
                 }
-                try fileManager.setAttributes(
-                    [
-                        .posixPermissions: 0o600,
-                        .protectionKey: FileProtectionType.completeUntilFirstUserAuthentication,
-                    ],
-                    ofItemAtPath: stagedURL.path
-                )
+                // The staging file is already inside this app's data-protected
+                // sandbox. Do not make import depend on mutable POSIX metadata;
+                // the validated bytes move immediately to device-only Keychain
+                // and the fixed staging path is still removed below.
                 bytes = try Data(contentsOf: stagedURL, options: [])
                 guard !bytes.isEmpty,
                       bytes.count <= maximumPairingRecordBytes,
@@ -104,14 +104,18 @@ final class ProbeController: ObservableObject {
                 }
                 accepted = true
                 outcome = "USB-staged record moved into device-local Keychain"
+            } catch ImportError.stagingMissing {
+                outcome = "USB staging rejected: staging file unavailable"
             } catch ImportError.invalidBounds {
                 outcome = "USB staging rejected: invalid size or file type"
             } catch ImportError.invalidFormat {
                 outcome = "USB staging rejected: invalid RPPairing record"
+            } catch ImportError.storageFailure {
+                outcome = "USB staging rejected: device-local Keychain write failed"
             } catch ImportError.cleanupFailure {
                 outcome = "USB staging rejected: secure cleanup failed"
             } catch {
-                outcome = "USB staging rejected: local read or storage failure"
+                outcome = "USB staging rejected: local read failure"
             }
             if !accepted {
                 try? Self.removeStagedRecord(at: stagedURL, byteCount: bytes.count)
@@ -292,6 +296,7 @@ final class ProbeController: ObservableObject {
     }
 
     private enum ImportError: Error {
+        case stagingMissing
         case invalidBounds
         case invalidFormat
         case storageFailure

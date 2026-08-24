@@ -43,6 +43,7 @@ enum PairingRecordStore {
         }
         var create = identity
         create.merge(attributes) { _, new in new }
+        create[kSecAttrSynchronizable as String] = kCFBooleanFalse as Any
         return SecItemAdd(create as CFDictionary, nil) == errSecSuccess
     }
 
@@ -56,7 +57,6 @@ enum PairingRecordStore {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-            kSecAttrSynchronizable as String: kCFBooleanFalse as Any,
         ]
     }
 }
