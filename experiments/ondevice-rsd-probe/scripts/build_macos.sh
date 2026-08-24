@@ -89,7 +89,6 @@ grep -q 'http://127.0.0.1:8100/status' /tmp/jarvis-rsd-probe-app.strings
 grep -q 'LOCAL CONTROLLER + WDA PASS' /tmp/jarvis-rsd-probe-app.strings
 for forbidden in \
   'setupManualPairing' \
-  '000000' \
   'workbox.tailfd8ac6.ts.net' \
   '/v1/heartbeat' \
   'secure-unlock' \

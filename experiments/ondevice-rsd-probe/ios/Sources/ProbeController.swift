@@ -656,11 +656,13 @@ final class ProbeController: ObservableObject {
         stopControllerProgressTimer()
         controllerProgressTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) {
             [weak self] _ in
-            guard let self else { return }
             let current = jarvis_rsd_fixed_wda_progress()
-            self.stage = Self.stageName(current)
-            if current == UInt32(JARVIS_RSD_STAGE_CONTROLLER_RUNNER_AUTHORIZATION) {
-                self.status = "Runner authorization waiting — use only a real iOS system prompt directly on-device"
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.stage = Self.stageName(current)
+                if current == UInt32(JARVIS_RSD_STAGE_CONTROLLER_RUNNER_AUTHORIZATION) {
+                    self.status = "Runner authorization waiting — use only a real iOS system prompt directly on-device"
+                }
             }
         }
     }
