@@ -36,7 +36,7 @@ class V20PolicyTests(unittest.TestCase):
             "wda-keyboard-probe",
             "secure-unlock",
         ])
-        self.assertIn('ios-standalone-20r2-integrated-controller', AGENT)
+        self.assertIn('ios-standalone-20r3-integrated-controller', AGENT)
 
     def test_pairing_authority_is_device_only(self):
         self.assertIn("AfterFirstUnlockThisDeviceOnly", SOURCES)
@@ -49,6 +49,14 @@ class V20PolicyTests(unittest.TestCase):
     def test_one_visible_execution_owner(self):
         self.assertEqual(SOURCES.count("BGContinuedProcessingTaskRequest("), 1)
         self.assertIn("One visible 48-hour iOS Continued Processing task owns both", SOURCES)
+        self.assertIn("private let overallDuration: TimeInterval = 48 * 60 * 60", SOURCES)
+        self.assertIn("private let normalSliceDuration: TimeInterval = 4 * 60 * 60", SOURCES)
+        self.assertIn("private let initialProofSliceDuration: TimeInterval = 3 * 60", SOURCES)
+        self.assertIn("private let maximumRolloverSubmissionAttempts = 3", SOURCES)
+        self.assertIn("Rolling visible execution handoff", SOURCES)
+        successor = SOURCES.index("try BGTaskScheduler.shared.submit(makeRequest(identifier: identifier))", SOURCES.index("private func submitSuccessor"))
+        completion = SOURCES.index("oldTask.setTaskCompleted", successor)
+        self.assertLess(successor, completion)
         self.assertIn("IntegratedControllerManager.shared.stopForRecoveryExpiration()", SOURCES)
         self.assertIn("private let maximumRecoveryAttempts = 3", INTEGRATED)
         self.assertIn("Controller transport ended", INTEGRATED)
