@@ -1,0 +1,35 @@
+name: JarvisAgentV21
+options:
+  minimumXcodeGenVersion: 2.40.0
+  deploymentTarget:
+    iOS: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGN_IDENTITY: ""
+    PRODUCT_BUNDLE_IDENTIFIER: com.forwardinfinity.jarvisagent
+    MARKETING_VERSION: "0.21.0"
+    CURRENT_PROJECT_VERSION: "25"
+    HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/../../../experiments/ondevice-rsd-probe/include"
+    SWIFT_INCLUDE_PATHS: "$(PROJECT_DIR)/../../../experiments/ondevice-rsd-probe/include"
+    LIBRARY_SEARCH_PATHS: "$(PROJECT_DIR)/../../../experiments/ondevice-rsd-probe/rust/target/aarch64-apple-ios/release"
+    OTHER_LDFLAGS: "$(inherited) -ljarvis_rsd_probe"
+targets:
+  JarvisAgentV21:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    settings:
+      base:
+        PRODUCT_NAME: JarvisAgent
+        PRODUCT_MODULE_NAME: JarvisAgentV21
+        INFOPLIST_FILE: Sources/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        GENERATE_INFOPLIST_FILE: NO
+    scheme:
+      testTargets: []
