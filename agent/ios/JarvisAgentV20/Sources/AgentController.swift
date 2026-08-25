@@ -8,7 +8,7 @@ final class AgentController: ObservableObject {
 
     private let baseURL = URL(string: "https://workbox.tailfd8ac6.ts.net")!
     private let protocolVersion = 1
-    private let agentVersion = "ios-standalone-20r4-integrated-controller"
+    private let agentVersion = "ios-standalone-20r5-integrated-controller"
     private let allowedCommands = Set([
         "ping",
         "probe-local-control",
