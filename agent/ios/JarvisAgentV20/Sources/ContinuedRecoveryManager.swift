@@ -11,8 +11,14 @@ final class ContinuedRecoveryManager: ObservableObject {
     private let operationStartedKey = "jarvis-continued-recovery-started"
     private let sliceStartedKey = "jarvis-continued-recovery-slice-started"
     private let handoffProofKey = "jarvis-continued-recovery-handoff-proof"
+    private let handoffCountKey = "jarvis-continued-recovery-handoff-count"
+    private let expirationCountKey = "jarvis-continued-recovery-expiration-count"
+    private let eventKey = "jarvis-continued-recovery-event"
+    private let allocationActiveKey = "jarvis-continued-recovery-allocation-active"
     private let overallDuration: TimeInterval = 48 * 60 * 60
-    private let normalSliceDuration: TimeInterval = 4 * 60 * 60
+    // iOS ended the prior allocation before its four-hour target. Rotate one
+    // visible operation every twenty minutes, well before that observed bound.
+    private let normalSliceDuration: TimeInterval = 20 * 60
     private let initialProofSliceDuration: TimeInterval = 3 * 60
     private let rolloverRetryDelay: TimeInterval = 60
     private let maximumRolloverSubmissionAttempts = 3
@@ -64,6 +70,10 @@ final class ContinuedRecoveryManager: ObservableObject {
             let now = Date().timeIntervalSince1970
             UserDefaults.standard.set(now, forKey: self.operationStartedKey)
             UserDefaults.standard.set(false, forKey: self.handoffProofKey)
+            UserDefaults.standard.set(0, forKey: self.handoffCountKey)
+            UserDefaults.standard.set(0, forKey: self.expirationCountKey)
+            UserDefaults.standard.set(false, forKey: self.allocationActiveKey)
+            self.recordEvent("initial-submit")
             guard self.submitInitialRequest() else {
                 self.clearPersistedOperation()
                 self.publish(requested: false, active: false, status: "Submission rejected")
@@ -160,6 +170,12 @@ final class ContinuedRecoveryManager: ObservableObject {
 
         rolloverInProgress = true
         UserDefaults.standard.set(true, forKey: handoffProofKey)
+        UserDefaults.standard.set(
+            UserDefaults.standard.integer(forKey: handoffCountKey) + 1,
+            forKey: handoffCountKey
+        )
+        UserDefaults.standard.set(false, forKey: allocationActiveKey)
+        recordEvent("handoff-submitted")
         timer?.cancel()
         timer = nil
         currentTask = nil
@@ -181,6 +197,8 @@ final class ContinuedRecoveryManager: ObservableObject {
             self.currentTask = task
             self.rolloverInProgress = false
             self.rolloverSubmissionAttempts = 0
+            UserDefaults.standard.set(true, forKey: self.allocationActiveKey)
+            self.recordEvent("allocation-active")
             self.nextRolloverAttempt = .distantPast
 
             let now = Date().timeIntervalSince1970
@@ -203,7 +221,14 @@ final class ContinuedRecoveryManager: ObservableObject {
                     }
                     // One bounded emergency handoff while iOS still grants the
                     // expiration callback. Failure ends everything fail-closed.
+                    UserDefaults.standard.set(
+                        UserDefaults.standard.integer(forKey: self.expirationCountKey) + 1,
+                        forKey: self.expirationCountKey
+                    )
+                    self.recordEvent("expiration-callback")
+                    AgentController.shared.continuedRecoveryPulse()
                     if !self.submitSuccessor(completingCurrentSuccessfully: false) {
+                        self.recordEvent("expiration-handoff-rejected")
                         task.setTaskCompleted(success: false)
                         self.finishWithoutCompleting(status: "Expired by iOS; handoff rejected")
                     }
@@ -253,6 +278,7 @@ final class ContinuedRecoveryManager: ObservableObject {
                   now >= self.nextRolloverAttempt else { return }
             if !self.submitSuccessor(completingCurrentSuccessfully: true) {
                 self.rolloverSubmissionAttempts += 1
+                self.recordEvent("proactive-handoff-deferred")
                 self.nextRolloverAttempt = now.addingTimeInterval(self.rolloverRetryDelay)
                 self.publish(
                     requested: true,
@@ -276,6 +302,7 @@ final class ContinuedRecoveryManager: ObservableObject {
         timer = nil
         currentTask = nil
         rolloverInProgress = false
+        UserDefaults.standard.set(false, forKey: allocationActiveKey)
         clearPersistedOperation()
         publish(requested: false, active: false, status: status)
     }
@@ -285,6 +312,12 @@ final class ContinuedRecoveryManager: ObservableObject {
         UserDefaults.standard.removeObject(forKey: operationStartedKey)
         UserDefaults.standard.removeObject(forKey: sliceStartedKey)
         UserDefaults.standard.removeObject(forKey: handoffProofKey)
+    }
+
+    private func recordEvent(_ event: String) {
+        // Values are fixed non-secret state labels consumed by heartbeat
+        // telemetry; no error descriptions or caller-selected text are stored.
+        UserDefaults.standard.set(event, forKey: eventKey)
     }
 
     private func publish(requested: Bool, active: Bool, status: String) {
