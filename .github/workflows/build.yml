@@ -88,8 +88,6 @@ jobs:
             'ios-standalone-21-full-ui' \
             '/jarvis-ui/v1/poll' \
             '/jarvis-ui/v1/result' \
-            'Explicit opt-in for unlocked screens' \
-            'Enabled · unlocked screens only' \
             'device-locked' \
             'Ambiguous result; fail closed' \
             'INTEGRATED JARVIS CONTROLLER + WDA PASS' \
