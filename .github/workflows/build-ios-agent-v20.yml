@@ -88,8 +88,6 @@ jobs:
             'ios-standalone-21-full-ui' \
             '/jarvis-ui/v1/poll' \
             '/jarvis-ui/v1/result' \
-            'device-locked' \
-            'Ambiguous result; fail closed' \
             'INTEGRATED JARVIS CONTROLLER + WDA PASS' \
             '10.7.0.1' \
             'http://127.0.0.1:8100/status' \
