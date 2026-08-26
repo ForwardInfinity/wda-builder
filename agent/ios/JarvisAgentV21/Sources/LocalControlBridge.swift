@@ -395,9 +395,11 @@ final class LocalControlBridge {
                 return
             }
             // /wda/unlock blocks until FBScreenLockTimeout when a passcode is
-            // present. Home wakes Cover Sheet; one fixed public digit then
-            // exposes the keypad. Backspace removes it before the XML gate,
-            // which requires exactly "0 of 6 values entered".
+            // present. Home wakes Cover Sheet. A fixed upward reveal gesture
+            // handles the physical-lock + Now Playing sheet without accepting
+            // any VPS-selected coordinate. One public digit then exposes the
+            // keypad; Backspace removes it before the XML gate, which requires
+            // exactly "0 of 6 values entered".
             self.wdaRequest(
                 method: "POST",
                 path: "/session/\(sessionID)/wda/pressButton",
@@ -407,32 +409,67 @@ final class LocalControlBridge {
                     completion(homeCode, false)
                     return
                 }
-                // A dark Cover Sheet can accept Home before SpringBoard has
-                // made its secure accessibility tree queryable. Wait for that
-                // transition before the one public digit/cleanup sequence.
                 self.callbackQueue.asyncAfter(deadline: .now() + 0.85) {
-                    self.sendHID(sessionID: sessionID, usage: 0x1E, duration: 0.15) { publicDigitCode in
-                        guard publicDigitCode == 200 else {
-                            completion(publicDigitCode, false)
+                    self.performFixedLockScreenReveal(sessionID: sessionID) { revealCode in
+                        guard revealCode == 200 else {
+                            completion(revealCode, false)
                             return
                         }
-                        self.callbackQueue.asyncAfter(deadline: .now() + 0.35) {
-                            self.sendHID(sessionID: sessionID, usage: 0x2A, duration: 0.05) { cleanupCode in
-                                guard cleanupCode == 200 else {
-                                    completion(cleanupCode, false)
+                        self.callbackQueue.asyncAfter(deadline: .now() + 0.50) {
+                            self.sendHID(sessionID: sessionID, usage: 0x1E, duration: 0.15) { publicDigitCode in
+                                guard publicDigitCode == 200 else {
+                                    completion(publicDigitCode, false)
                                     return
                                 }
-                                self.callbackQueue.asyncAfter(deadline: .now() + 0.85) {
-                                    self.readEmptyPasscodeGate(
-                                        remaining: self.keypadSourceReadAttempts,
-                                        completion: completion
-                                    )
+                                self.callbackQueue.asyncAfter(deadline: .now() + 0.35) {
+                                    self.sendHID(sessionID: sessionID, usage: 0x2A, duration: 0.05) { cleanupCode in
+                                        guard cleanupCode == 200 else {
+                                            completion(cleanupCode, false)
+                                            return
+                                        }
+                                        self.callbackQueue.asyncAfter(deadline: .now() + 0.85) {
+                                            self.readEmptyPasscodeGate(
+                                                remaining: self.keypadSourceReadAttempts,
+                                                completion: completion
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
+        }
+    }
+
+    /// Fixed iPhone 13,4 viewport gesture. This is part of the device-local
+    /// lock plane: no host coordinate, selector, text, or request body enters it.
+    private func performFixedLockScreenReveal(
+        sessionID: String,
+        completion: @escaping (Int) -> Void
+    ) {
+        let pointerActions: [[String: Any]] = [
+            ["type": "pointerMove", "duration": 0, "x": 214, "y": 840],
+            ["type": "pointerDown", "button": 0],
+            ["type": "pause", "duration": 80],
+            ["type": "pointerMove", "duration": 350, "x": 214, "y": 240],
+            ["type": "pointerUp", "button": 0],
+        ]
+        let body: [String: Any] = [
+            "actions": [[
+                "type": "pointer",
+                "id": "jarvis-fixed-lock-reveal",
+                "parameters": ["pointerType": "touch"],
+                "actions": pointerActions,
+            ]],
+        ]
+        wdaRequest(
+            method: "POST",
+            path: "/session/\(sessionID)/actions",
+            body: body
+        ) { code, _ in
+            completion(code)
         }
     }
 

@@ -21,7 +21,7 @@ from jarvis_agent_server import AgentStore, atomic_json
 DEFAULT_STATE_DIR = Path("/var/lib/jarvis-agent")
 DEFAULT_ARM_FILE = Path("/run/jarvis-agent-enroll.json")
 DEFAULT_OUTPUT = Path("/var/lib/jarvis-agent/v21-lifecycle-soak.json")
-EXPECTED_VERSION = "ios-standalone-21r1-full-ui"
+EXPECTED_VERSION = "ios-standalone-21r2-full-ui"
 EXPECTED_NETWORK = "Cellular"
 PROBE_ACTION = "probe-local-control"
 

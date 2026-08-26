@@ -23,7 +23,7 @@ class V21FullUIPolicy(unittest.TestCase):
             "wda-continue-recovery", "wda-keyboard-probe", "secure-unlock",
         ])
         self.assertNotIn("jarvis-ui", FIXED_SERVER)
-        self.assertIn('ios-standalone-21r1-full-ui', AGENT)
+        self.assertIn('ios-standalone-21r2-full-ui', AGENT)
 
     def test_full_ui_requires_direct_opt_in_and_visible_execution(self):
         self.assertIn("Explicit opt-in for unlocked screens", UI)
@@ -71,6 +71,19 @@ class V21FullUIPolicy(unittest.TestCase):
         self.assertNotIn("sendHID", helper)
         self.assertNotIn("DevicePasscodeStore", helper)
         self.assertNotIn("readSecretAfterBoundary", helper)
+
+    def test_physical_lock_reveal_is_fixed_and_pre_secret(self):
+        start = LOCAL.index("private func performFixedLockScreenReveal")
+        end = LOCAL.index("private func readEmptyPasscodeGate", start)
+        helper = LOCAL[start:end]
+        self.assertIn('"id": "jarvis-fixed-lock-reveal"', helper)
+        self.assertIn('"x": 214, "y": 840', helper)
+        self.assertIn('"x": 214, "y": 240', helper)
+        self.assertIn('path: "/session/\\(sessionID)/actions"', helper)
+        self.assertNotIn("DevicePasscodeStore", helper)
+        self.assertNotIn("readSecretAfterBoundary", helper)
+        prepare = LOCAL[LOCAL.index("private func prepareKeypad"):start]
+        self.assertLess(prepare.index("performFixedLockScreenReveal"), prepare.index("sendHID"))
 
 
 if __name__ == "__main__":
