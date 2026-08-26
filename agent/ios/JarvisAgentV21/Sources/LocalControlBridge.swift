@@ -76,6 +76,7 @@ final class LocalControlBridge {
     private let networkQueue = DispatchQueue(label: "com.forwardinfinity.jarvisagent.local-control.network")
     private let wdaBaseURL = URL(string: "http://localhost:8100")!
     private let sessionDelegate = LocalOnlySessionDelegate()
+    private let keypadSourceReadAttempts = 5
 
     private lazy var session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
@@ -406,27 +407,50 @@ final class LocalControlBridge {
                     completion(homeCode, false)
                     return
                 }
-                self.callbackQueue.asyncAfter(deadline: .now() + 0.20) {
+                // A dark Cover Sheet can accept Home before SpringBoard has
+                // made its secure accessibility tree queryable. Wait for that
+                // transition before the one public digit/cleanup sequence.
+                self.callbackQueue.asyncAfter(deadline: .now() + 0.85) {
                     self.sendHID(sessionID: sessionID, usage: 0x1E, duration: 0.15) { publicDigitCode in
                         guard publicDigitCode == 200 else {
                             completion(publicDigitCode, false)
                             return
                         }
-                        self.callbackQueue.asyncAfter(deadline: .now() + 0.20) {
+                        self.callbackQueue.asyncAfter(deadline: .now() + 0.35) {
                             self.sendHID(sessionID: sessionID, usage: 0x2A, duration: 0.05) { cleanupCode in
                                 guard cleanupCode == 200 else {
                                     completion(cleanupCode, false)
                                     return
                                 }
-                                self.callbackQueue.asyncAfter(deadline: .now() + 0.30) {
-                                    self.wdaRequest(method: "GET", path: "/source", body: nil) { sourceCode, data in
-                                        completion(sourceCode, sourceCode == 200 && self.isEmptyPasscodeXML(data))
-                                    }
+                                self.callbackQueue.asyncAfter(deadline: .now() + 0.85) {
+                                    self.readEmptyPasscodeGate(
+                                        remaining: self.keypadSourceReadAttempts,
+                                        completion: completion
+                                    )
                                 }
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// SpringBoard can transiently return HTTP 500 for /source while its
+    /// secure lock-screen tree is being published. Retry only this read-only,
+    /// bounded XML fetch: no additional HID event and no secret access occurs.
+    private func readEmptyPasscodeGate(
+        remaining: Int,
+        completion: @escaping (Int, Bool) -> Void
+    ) {
+        wdaRequest(method: "GET", path: "/source", body: nil) { sourceCode, data in
+            let passed = sourceCode == 200 && self.isEmptyPasscodeXML(data)
+            guard !passed, remaining > 1 else {
+                completion(sourceCode, passed)
+                return
+            }
+            self.callbackQueue.asyncAfter(deadline: .now() + 0.75) {
+                self.readEmptyPasscodeGate(remaining: remaining - 1, completion: completion)
             }
         }
     }

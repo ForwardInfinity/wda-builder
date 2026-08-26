@@ -12,8 +12,8 @@ settings:
     CODE_SIGNING_REQUIRED: NO
     CODE_SIGN_IDENTITY: ""
     PRODUCT_BUNDLE_IDENTIFIER: com.forwardinfinity.jarvisagent
-    MARKETING_VERSION: "0.21.0"
-    CURRENT_PROJECT_VERSION: "25"
+    MARKETING_VERSION: "0.21.1"
+    CURRENT_PROJECT_VERSION: "26"
     HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/../../../experiments/ondevice-rsd-probe/include"
     SWIFT_INCLUDE_PATHS: "$(PROJECT_DIR)/../../../experiments/ondevice-rsd-probe/include"
     LIBRARY_SEARCH_PATHS: "$(PROJECT_DIR)/../../../experiments/ondevice-rsd-probe/rust/target/aarch64-apple-ios/release"

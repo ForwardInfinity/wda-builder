@@ -7,6 +7,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 V21 = ROOT / "agent/ios/JarvisAgentV21"
 FULL = (V21 / "Sources/FullUIBridge.swift").read_text()
 AGENT = (V21 / "Sources/AgentController.swift").read_text()
+LOCAL = (V21 / "Sources/LocalControlBridge.swift").read_text()
 UI = (V21 / "Sources/JarvisAgentApp.swift").read_text()
 SERVER = (ROOT / "agent/jarvis_ui_server.py").read_text()
 FIXED_SERVER = (ROOT / "agent/jarvis_agent_server.py").read_text()
@@ -22,7 +23,7 @@ class V21FullUIPolicy(unittest.TestCase):
             "wda-continue-recovery", "wda-keyboard-probe", "secure-unlock",
         ])
         self.assertNotIn("jarvis-ui", FIXED_SERVER)
-        self.assertIn('ios-standalone-21-full-ui', AGENT)
+        self.assertIn('ios-standalone-21r1-full-ui', AGENT)
 
     def test_full_ui_requires_direct_opt_in_and_visible_execution(self):
         self.assertIn("Explicit opt-in for unlocked screens", UI)
@@ -59,6 +60,17 @@ class V21FullUIPolicy(unittest.TestCase):
         self.assertIn("mode: int = 0o600", SERVER)
         self.assertIn("state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)", SERVER)
         self.assertIn("never emit request logs", SERVER)
+
+    def test_dark_keypad_recovery_retries_only_read_only_source(self):
+        self.assertIn("private let keypadSourceReadAttempts = 5", LOCAL)
+        start = LOCAL.index("private func readEmptyPasscodeGate")
+        end = LOCAL.index("private func createSession", start)
+        helper = LOCAL[start:end]
+        self.assertIn('method: "GET", path: "/source"', helper)
+        self.assertIn("remaining: remaining - 1", helper)
+        self.assertNotIn("sendHID", helper)
+        self.assertNotIn("DevicePasscodeStore", helper)
+        self.assertNotIn("readSecretAfterBoundary", helper)
 
 
 if __name__ == "__main__":
